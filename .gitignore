@@ -1,6 +1,9 @@
 build/
 bin/
+venv/
 .venv/
+__pycache__/
+*.pyc
 *.exe
 *.dll
 openvino_genai_windows_2025.4.0.0_x86_64/
