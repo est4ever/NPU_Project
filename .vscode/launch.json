@@ -1,0 +1,20 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run npu_wrapper (dist)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/dist/npu_wrapper.exe",
+      "cwd": "${workspaceFolder}/dist",
+      "environment": [
+        {
+          "name": "PATH",
+          "value": "${workspaceFolder}/dist;${env:PATH}"
+        }
+      ],
+      "externalConsole": true,
+      "MIMode": "gdb"
+    }
+  ]
+}
