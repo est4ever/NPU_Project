@@ -1,9 +1,27 @@
+# Build artifacts
 build/
+dist/
 bin/
+
+# Python
 venv/
 .venv/
 __pycache__/
 *.pyc
-*.exe
+
+# OpenVINO / binaries
 *.dll
-openvino_genai_windows_2025.4.0.0_x86_64/
+*.exe
+*.bin
+
+# Models (too large for git)
+models/TinyLlama_ov/
+
+# OS / editor
+.vscode/
+.DS_Store
+Thumbs.db
+
+.vscode/*
+!.vscode/launch.json
+!.vscode/c_cpp_properties.json
