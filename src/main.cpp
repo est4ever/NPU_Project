@@ -2,16 +2,19 @@
 #include <openvino/runtime/core.hpp>
 
 #include <windows.h>
+
 #include <iostream>
 #include <vector>
 #include <string>
 #include <fstream>
 
+// Append logs to runlog.txt (handy when dist runs outside VSCode)
 static void logline(const std::string& s) {
     std::ofstream f("runlog.txt", std::ios::app);
     f << s << std::endl;
 }
 
+// Pick NPU if available, else CPU. Also print available devices.
 static std::string pick_device_and_print() {
     std::string chosen = "CPU";
     try {
@@ -23,7 +26,9 @@ static std::string pick_device_and_print() {
         for (const auto& d : devs) {
             std::cout << "  - " << d << "\n";
             logline("  - " + d);
-            if (d.find("NPU") != std::string::npos) chosen = "NPU";
+            if (d.find("NPU") != std::string::npos) {
+                chosen = "NPU";
+            }
         }
     } catch (const std::exception& e) {
         std::cerr << "Device scan failed: " << e.what() << "\n";
@@ -38,10 +43,11 @@ static std::string pick_device_and_print() {
 }
 
 int main() {
-    // Show EXE path (proves which binary is running)
-    char exePath[MAX_PATH];
+    // Proves which binary is running (useful when you have build/ vs dist/)
+    char exePath[MAX_PATH]{0};
     GetModuleFileNameA(nullptr, exePath, MAX_PATH);
-    MessageBoxA(nullptr, exePath, "EXE PATH", MB_OK);
+    // Comment this out once you're confident it's the right exe:
+    // MessageBoxA(nullptr, exePath, "EXE PATH", MB_OK);
 
     logline("=== RUN START ===");
     logline(std::string("EXE: ") + exePath);
@@ -49,7 +55,10 @@ int main() {
     std::cout << "MAIN STARTED\n" << std::flush;
     logline("MAIN STARTED");
 
-    // Export output folder
+    // IMPORTANT: this expects you run from dist/
+    // dist/
+    //   npu_wrapper.exe
+    //   models/TinyLlama_ov/...
     std::string model_dir = "./models/TinyLlama_ov";
     std::cout << "Model dir: " << model_dir << "\n" << std::flush;
     logline("Model dir: " + model_dir);
@@ -76,9 +85,34 @@ int main() {
 
             std::cout << "AI: " << std::flush;
 
-            auto streamer = [](const std::string& piece) {
+            // Stop the model if it starts generating the next dialogue turn
+            // (TinyLlama often continues with "You:" / "User:" / "AI:" by itself)
+            std::string buffer;
+
+            auto streamer = [&](const std::string& piece) {
+                buffer += piece;
+
+                // If the model begins a new turn marker, stop generation.
+                const char* markers[] = {"\nYou:", "\nUser:", "\nAI:"};
+                size_t cut = std::string::npos;
+
+                for (auto* m : markers) {
+                    size_t pos = buffer.find(m);
+                    if (pos != std::string::npos) {
+                        cut = pos;
+                        break;
+                    }
+                }
+
+                if (cut != std::string::npos) {
+                    // Print only up to the marker and stop
+                    std::cout << buffer.substr(0, cut) << std::flush;
+                    return true; // stop generation
+                }
+
+                // Otherwise stream normally
                 std::cout << piece << std::flush;
-                return false;
+                return false; // keep generating
             };
 
             pipe.generate(prompt, cfg, streamer);
@@ -88,18 +122,36 @@ int main() {
         std::cerr << "\nOpenVINO GenAI exception: " << e.what() << "\n";
         logline(std::string("GenAI exception: ") + e.what());
 
+        // If NPU fails, retry on CPU once (common when plugins/extensions aren't available)
         if (device == "NPU") {
             std::cerr << "Retrying on CPU...\n";
             logline("Retrying on CPU...");
             try {
                 ov::genai::LLMPipeline pipe(model_dir, "CPU");
+
                 ov::genai::GenerationConfig cfg;
                 cfg.max_new_tokens = 64;
+                cfg.temperature = 0.7f;
 
                 std::string prompt = "Say hello in one sentence.";
                 std::cout << "AI: " << std::flush;
 
-                auto streamer = [](const std::string& piece) {
+                std::string buffer;
+                auto streamer = [&](const std::string& piece) {
+                    buffer += piece;
+
+                    const char* markers[] = {"\nYou:", "\nUser:", "\nAI:"};
+                    size_t cut = std::string::npos;
+                    for (auto* m : markers) {
+                        size_t pos = buffer.find(m);
+                        if (pos != std::string::npos) { cut = pos; break; }
+                    }
+
+                    if (cut != std::string::npos) {
+                        std::cout << buffer.substr(0, cut) << std::flush;
+                        return true;
+                    }
+
                     std::cout << piece << std::flush;
                     return false;
                 };
