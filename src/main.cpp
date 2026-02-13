@@ -7,10 +7,11 @@
 #include <vector>
 #include <string>
 #include <fstream>
+#include <filesystem>
 
 // Append logs to runlog.txt (handy when dist runs outside VSCode)
 static void logline(const std::string& s) {
-    std::ofstream f("runlog.txt", std::ios::app);
+    std::ofstream f("../runlog.txt", std::ios::app);
     f << s << std::endl;
 }
 
@@ -42,7 +43,14 @@ static std::string pick_device_and_print() {
     return chosen;
 }
 
-int main() {
+int main(int argc, char** argv) {
+    // Check command line arguments
+    if (argc < 2) {
+        std::cerr << "Usage: npu_wrapper.exe <model_path>\n";
+        std::cerr << "Example: npu_wrapper.exe ./models/Qwen3_0_6B_ov\n";
+        return 1;
+    }
+
     // Proves which binary is running (useful when you have build/ vs dist/)
     char exePath[MAX_PATH]{0};
     GetModuleFileNameA(nullptr, exePath, MAX_PATH);
@@ -55,11 +63,7 @@ int main() {
     std::cout << "MAIN STARTED\n" << std::flush;
     logline("MAIN STARTED");
 
-    // IMPORTANT: this expects you run from dist/
-    // dist/
-    //   npu_wrapper.exe
-    //   models/TinyLlama_ov/...
-    std::string model_dir = "./models/TinyLlama_ov";
+    std::string model_dir = argv[1];
     std::cout << "Model dir: " << model_dir << "\n" << std::flush;
     logline("Model dir: " + model_dir);
 
@@ -74,6 +78,9 @@ int main() {
         cfg.max_new_tokens = 128;
         cfg.temperature = 0.7f;
 
+        // Warm-up run to stabilize device performance
+        std::cout << "Running warm-up...\n" << std::flush;
+        pipe.generate("Hello", cfg);
         std::cout << "READY. Type prompt (exit to quit)\n" << std::flush;
         logline("READY.");
 
@@ -88,6 +95,8 @@ int main() {
             // Stop the model if it starts generating the next dialogue turn
             // (TinyLlama often continues with "You:" / "User:" / "AI:" by itself)
             std::string buffer;
+
+            auto start_time = std::chrono::high_resolution_clock::now();
 
             auto streamer = [&](const std::string& piece) {
                 buffer += piece;
@@ -116,7 +125,12 @@ int main() {
             };
 
             pipe.generate(prompt, cfg, streamer);
-            std::cout << "\n" << std::flush;
+            
+            auto end_time = std::chrono::high_resolution_clock::now();
+            double elapsed = std::chrono::duration<double>(end_time - start_time).count();
+            
+            std::cout << "\n[Time: " << elapsed << " seconds]\n" << std::flush;
+            logline("Generation time: " + std::to_string(elapsed) + " seconds");
         }
     } catch (const std::exception& e) {
         std::cerr << "\nOpenVINO GenAI exception: " << e.what() << "\n";
@@ -171,5 +185,13 @@ int main() {
     }
 
     logline("=== RUN END ===");
+    
+    // Delete the log file when done
+    try {
+        std::filesystem::remove("../runlog.txt");
+    } catch (...) {
+        // Silently ignore if deletion fails
+    }
+    
     return 0;
 }
