@@ -13,6 +13,12 @@ find_package(OpenVINOGenAI CONFIG REQUIRED)
 
 add_executable(npu_wrapper src/main.cpp)
 
+add_custom_command(TARGET npu_wrapper POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy
+        $<TARGET_FILE:npu_wrapper>
+        ${CMAKE_SOURCE_DIR}/dist/
+)
+
 target_link_libraries(npu_wrapper PRIVATE
     openvino::runtime
     openvino::genai
