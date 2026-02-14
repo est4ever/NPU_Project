@@ -11,7 +11,7 @@
 
 // Append logs to runlog.txt (handy when dist runs outside VSCode)
 static void logline(const std::string& s) {
-    std::ofstream f("../runlog.txt", std::ios::app);
+    std::ofstream f("runlog.txt", std::ios::app);
     f << s << std::endl;
 }
 
@@ -54,8 +54,6 @@ int main(int argc, char** argv) {
     // Proves which binary is running (useful when you have build/ vs dist/)
     char exePath[MAX_PATH]{0};
     GetModuleFileNameA(nullptr, exePath, MAX_PATH);
-    // Comment this out once you're confident it's the right exe:
-    // MessageBoxA(nullptr, exePath, "EXE PATH", MB_OK);
 
     logline("=== RUN START ===");
     logline(std::string("EXE: ") + exePath);
@@ -188,7 +186,7 @@ int main(int argc, char** argv) {
     
     // Delete the log file when done
     try {
-        std::filesystem::remove("../runlog.txt");
+        std::filesystem::remove("runlog.txt");
     } catch (...) {
         // Silently ignore if deletion fails
     }
