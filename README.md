@@ -42,14 +42,37 @@ A minimal C++ CLI wrapper that runs **OpenVINO GenAI LLMs** (OpenVINO-exported m
 2. Run installer
 3. **Important:** Check "Add CMake to system PATH"
 
-#### C. OpenVINO GenAI (2025.4.0.0)
-1. Download from [GitHub Releases](https://github.com/openvinotoolkit/openvino.genai/releases)
-2. Find: `openvino_genai_windows_2025.4.0.0_x86_64.zip`
-3. Extract to: `C:\Users\<YourUsername>\Downloads\openvino_genai_windows_2025.4.0.0_x86_64\`
+#### C. OpenVINO GenAI (2025.4.0.0) - Archive Installation
+
+**Important:** You need the **Archive Installation** (C++ runtime), not just the PyPI package.
+
+**⚠️ Critical: Download the correct version (2025.4.0.0)**
+
+The OpenVINO documentation may show curl/wget commands for **different versions** (like 2024.6.0.0). **DO NOT use those commands directly** as they will download the wrong version.
+
+**Correct Download Method:**
+
+1. Go to [OpenVINO GenAI GitHub Releases](https://github.com/openvinotoolkit/openvino.genai/releases)
+2. Find **Release 2025.4.0.0**
+3. Download: `openvino_genai_windows_2025.4.0.0_x86_64.zip`
+4. Extract to: `C:\Users\<YourUsername>\Downloads\openvino_genai_windows_2025.4.0.0_x86_64\`
+5. **Verify:** The extracted folder should contain:
+   - `setupvars.bat` (at the root)
+   - `runtime/bin/intel64/Release/` (DLLs)
+   - `runtime/cmake/` (CMake config files)
+
+**⚠️ Common Mistakes:**
+- **DON'T** run `pip install openvino-genai` - that only installs Python bindings
+- **DON'T** copy curl commands from documentation - they may download the wrong version
+- You **NEED** the full archive with C++ runtime and `setupvars.bat` for this project
 
 #### D. Python 3.10+ (for model conversion only)
+
+**Note:** Python is optional - only needed if you want to convert models yourself.
+
 1. Download from [python.org](https://www.python.org/downloads/)
 2. **Important:** Check "Add Python to PATH"
+3. Later you'll run `pip install openvino-genai optimum[openvino]` for model conversion tools
 
 ### Step 2: Copy Project Files
 
@@ -57,6 +80,7 @@ Copy these from your source machine:
 ```
 NPU_Project/
 ├── CMakeLists.txt
+├── build.ps1              ← Build automation script
 ├── README.md
 ├── src/
 │   └── main.cpp
@@ -67,7 +91,8 @@ NPU_Project/
 - `build/` → Auto-generated during compilation
 - `dist/` → Auto-generated after build
 - `runlog.txt` → Auto-deleted after successful runs
-- Model folders → Download on your own
+- `venv/` → Python virtual environment (recreate on new machine)
+- Model folders → Download separately
 
 ### Step 3: Create Directories
 
@@ -92,17 +117,17 @@ python -m venv venv
 pip install optimum[openvino] torch transformers
 ```
 
-### Step 5: Configure OpenVINO (Optional)
+### Step 5: Update OpenVINO Path in CMakeLists.txt
 
-The `build.ps1` script automatically detects OpenVINO if extracted to the default location:
-- `C:\Users\<YourUsername>\Downloads\openvino_genai_windows_2025.4.0.0_x86_64\`
-- `C:\Users\<YourUsername>\Downloads\openvino_genai_windows_2025.4.1.0_x86_64\`
-
-If your OpenVINO is in a different location, set the environment variable before running build.ps1:
-```powershell
-$env:OPENVINO_GENAI_DIR = "C:\path\to\your\openvino_genai_windows_2025.4.0.0_x86_64"
-.\build.ps1
+Edit `CMakeLists.txt` lines 13-14 and replace `ser13` with your Windows username:
+```cmake
+set(OpenVINO_DIR "C:/Users/<YourUsername>/Downloads/openvino_genai_windows_2025.4.0.0_x86_64/runtime/cmake")
+set(OpenVINOGenAI_DIR "C:/Users/<YourUsername>/Downloads/openvino_genai_windows_2025.4.0.0_x86_64/runtime/cmake")
 ```
+
+**Important:** Use forward slashes `/` not backslashes `\` in CMakeLists.txt.
+
+The `build.ps1` script already uses `$env:USERNAME` so it will work on any machine automatically.
 
 ---
 
@@ -110,15 +135,16 @@ $env:OPENVINO_GENAI_DIR = "C:\path\to\your\openvino_genai_windows_2025.4.0.0_x86
 
 ### Option A: Download Models
 
-**TinyLlama (recommended for testing)**
-- ~1.5B parameters, very fast
-- Download from Hugging Face: [TinyLlama-1.1B-Chat-v1.0-ov](https://huggingface.co/Xenova/TinyLlama-1.1B-Chat-v1.0-ov)
-- Extract to: `models/TinyLlama_ov/`
+**Qwen2.5-0.5B-Instruct (recommended for testing)**
+- ~0.5B parameters, extremely fast
+- Download from: [Qwen/Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct)
+- Or download pre-converted OpenVINO version if available
+- Place in: `models/Qwen2.5-0.5B-Instruct/`
 
-**Qwen 0.6B**
-- ~0.6B parameters, extremely fast
-- Download from: [Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct)
-- Extract to: `models/Qwen3_0.6B_ov/`
+**TinyLlama (alternative)**
+- ~1.1B parameters, very fast
+- Download from Hugging Face: [TinyLlama-1.1B-Chat-v1.0](https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0)
+- Place in: `models/TinyLlama_ov/`
 
 ### Option B: Convert Models Yourself
 
@@ -153,25 +179,39 @@ ovc --input_model model.gguf -o ./models/my_model_ov/
 
 ---
 
-## How to Run
+## How to Build and Run
 
-### Basic Usage
+### First Time Setup
 
 ```powershell
 cd C:\Users\<YourUsername>\NPU_Project
 
-# Run with TinyLlama
-.\dist\npu_wrapper.exe ./models/TinyLlama_ov
+# Build the project (this also sets up OpenVINO environment)
+.\build.ps1 -Clean
+```
 
-# Run with Qwen 0.6B
-.\dist\npu_wrapper.exe ./models/Qwen3_0.6B_ov
+The build script will:
+1. Load OpenVINO environment variables
+2. Create the `build/` directory
+3. Configure CMake with Visual Studio 2022
+4. Compile in Release mode
+5. Copy executable and all DLLs to `dist/`
+
+### Running the Model
+
+```powershell
+# Run with Qwen2.5-0.5B-Instruct
+.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct
+
+# Run with TinyLlama (if you have it)
+.\dist\npu_wrapper.exe ./models/TinyLlama_ov
 ```
 
 ### Expected Output
 
 ```
 MAIN STARTED
-Model dir: ./models/TinyLlama_ov
+Model dir: ./models/Qwen2.5-0.5B-Instruct
 Available devices:
   - CPU
   - GPU
@@ -196,47 +236,73 @@ You: exit
 
 ---
 
+## Important: Environment Variables & setupvars.bat
+
+**The Problem:**
+OpenVINO requires environment variables (PATH, OPENVINO_DIR, etc.) to be set before the executable runs. These are configured by running `setupvars.bat`.
+
+**Why this is tricky in PowerShell:**
+When you run `cmd /c "setupvars.bat"` from PowerShell:
+1. PowerShell spawns a **new cmd.exe process**
+2. `setupvars.bat` sets environment variables **inside that cmd process only**
+3. When cmd.exe exits, **all those environment variables are lost**
+4. Your PowerShell session never receives them
+
+**How build.ps1 solves this:**
+The script uses a clever workaround:
+```powershell
+# Capture environment variables from setupvars.bat
+$envOutput = cmd /c "call `"$OV\setupvars.bat`" > nul && set"
+
+# Import each variable into current PowerShell session
+foreach ($line in $envOutput) {
+    $idx = $line.IndexOf('=')
+    if ($idx -gt 0) {
+        $name = $line.Substring(0, $idx)
+        $value = $line.Substring($idx + 1)
+        Set-Item -Path "Env:$name" -Value $value
+    }
+}
+```
+
+This runs `setupvars.bat` in cmd, captures the resulting environment variables with `set`, then imports them into your PowerShell session where they **persist** for future commands.
+
+**Result:** After running `.\build.ps1`, your PowerShell session has all OpenVINO environment variables set, so the executable runs without issues.
+
+---
+
 ## Rebuilding After Code Changes
 
 ### Using the Automated Script (Recommended)
 
-**Use the included `build.ps1` script:**
+The `build.ps1` script handles everything automatically:
 
 ```powershell
-# Normal rebuild
+# Normal rebuild (incremental)
 .\build.ps1
 
-# Clean rebuild (deletes and recreates build folder)
+# Clean rebuild (deletes build folder first)
 .\build.ps1 -Clean
 ```
 
-The script automatically detects OpenVINO and compiles everything in one command. If OpenVINO is not found, it will show instructions on how to set `$env:OPENVINO_GENAI_DIR`.
+**What build.ps1 does:**
+1. Loads OpenVINO environment variables from `setupvars.bat` into your PowerShell session
+2. Cleans build directory if `-Clean` flag is used
+3. Runs CMake configuration with proper paths
+4. Builds in Release mode
+5. Automatically copies:
+   - `npu_wrapper.exe` to `dist/`
+   - All OpenVINO DLLs (openvino*.dll, tbb*.dll, etc.)
+   - MSVC runtime DLLs (msvcp140.dll, vcruntime140.dll)
 
-### Manual Option: Step-by-Step
+### Manual Rebuild (Not Recommended)
 
-#### If you modify `src/main.cpp`:
-
-```powershell
-# First, ensure OpenVINO setupvars.bat has been run:
-$OV = "$HOME\Downloads\openvino_genai_windows_2025.4.0.0_x86_64"
-cmd /c "`"$OV\setupvars.bat`""
-
-# Then build
-cd C:\Users\<YourUsername>\NPU_Project
-cmake --build build --config Release
-```
-
-#### If you modify `CMakeLists.txt` or change OpenVINO version:
+Only use this if build.ps1 fails:
 
 ```powershell
-# First, ensure OpenVINO setupvars.bat has been run:
-$OV = "$HOME\Downloads\openvino_genai_windows_2025.4.0.0_x86_64"
-cmd /c "`"$OV\setupvars.bat`""
-
-# Then reconfigure and build
-cd C:\Users\<YourUsername>\NPU_Project
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-cmake --build build --config Release
+# Load OpenVINO environment
+$OV = "C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_2025.4.0.0_x86_64"
+cmd /c "call `"$OV\setupvars.bat`" && cd /d C:\Users\ser13\NPU_Project && cmake --build build --config Release"
 ```
 
 ---
@@ -253,7 +319,7 @@ cmake --build build --config Release
 | **Auto-Device Fallback** | If NPU fails, automatically retries on CPU |
 | **Token Streaming** | Outputs tokens in real-time as they're generated |
 | **Execution Benchmarking** | Shows timing for each generation: `[Time: X.XXX seconds]` |
-| **Automatic Logging** | Logs all activity to `../runlog.txt` (auto-deleted on success, kept on error) |
+| **Automatic Logging** | Logs all activity to `runlog.txt` in project root (auto-deleted on success, kept on error) |
 | **Warm-up Run** | First generation runs silently with "Hello" prompt to stabilize device |
 | **Exe Path Detection** | Can show executable location for debugging (see code comment) |
 
@@ -278,23 +344,20 @@ for (const auto& d : devs) {
 
 **Note:** GPU devices will be listed in output, but the selection logic doesn't explicitly branch on GPU. Primary goal is NPU support with CPU as reliable fallback.
 
-### Known Issue in Usage Message
+### Model Path in Help Message
 
-⚠️ **The executable has an incorrect model name in its help text:**
+The executable's help message shows an example with an older model name:
 
 ```cpp
-// src/main.cpp line 48 (WRONG)
+// src/main.cpp line ~50
 "Example: npu_wrapper.exe ./models/Qwen3_0_6B_ov"
-                                       ^^^ underscore
 ```
 
-Should be:
+**Use your actual model folder name instead:**
 ```
-./models/Qwen3_0.6B_ov
-                ^^ dot
+./models/Qwen2.5-0.5B-Instruct    (current recommended model)
+./models/TinyLlama_ov              (alternative)
 ```
-
-**If you see the wrong example, ignore it.** Use the correct folder name with a dot: `Qwen3_0.6B_ov`
 
 ---
 
@@ -334,12 +397,12 @@ User types "exit"
     ↓
 Program reaches end (return 0)
     ↓
-C++ code: std::filesystem::remove("../runlog.txt")
+C++ code: std::filesystem::remove("runlog.txt")
     ↓
 runlog.txt automatically deleted
 ```
 
-**Location:** Writes to `../runlog.txt` in project root (because exe runs from `dist/` folder)
+**Location:** Writes to `runlog.txt` in current working directory (project root when running from project root)
 
 **Code that handles this (src/main.cpp, end of main):**
 ```cpp
@@ -347,7 +410,7 @@ logline("=== RUN END ===");
 
 // Delete the log file when done (success path only)
 try {
-    std::filesystem::remove("../runlog.txt");
+    std::filesystem::remove("runlog.txt");
 } catch (...) {
     // Silently ignore if deletion fails
 }
@@ -382,10 +445,13 @@ NPU_Project/
 │   │   └── npu_wrapper.exe         ← Compiled executable
 │   └── NPU_Project.sln
 │
-├── dist/                           ← Runtime folder (AUTO-POPULATED)
+├── dist/                           ← Runtime folder (AUTO-POPULATED by build.ps1)
 │   ├── npu_wrapper.exe             ← Copied from build/Release/
-│   ├── openvino*.dll               ← OpenVINO runtime libraries
-│   ├── tbb*.dll                    ← Intel TBB threading libraries
+│   ├── openvino*.dll               ← OpenVINO runtime libraries (19 DLLs)
+│   ├── icudt70.dll, icuuc70.dll    ← Unicode support libraries
+│   ├── msvcp140.dll                ← MSVC runtime (auto-copied)
+│   ├── vcruntime140.dll            ← MSVC runtime (auto-copied)
+│   ├── cache.json                  ← OpenVINO device cache
 │   └── runlog.txt                  ← Auto-deleted after successful run
 │
 ├── models/                         ← Your models (YOU POPULATE)
@@ -401,14 +467,30 @@ NPU_Project/
 └── .gitignore
 ```
 
-### Automatic Exe Copy
+### Automatic Exe and DLL Copy
 
-After each build, `CMakeLists.txt` automatically copies the executable:
+After each build, `CMakeLists.txt` automatically:
+
+1. **Creates dist/ folder** if it doesn't exist
+2. **Copies the executable** from build/Release/ to dist/
+3. **Copies all OpenVINO DLLs** from `runtime/bin/intel64/Release/`
+4. **Copies MSVC runtime DLLs** (msvcp140.dll, vcruntime140.dll)
 
 ```cmake
 add_custom_command(TARGET npu_wrapper POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        ${CMAKE_SOURCE_DIR}/dist/
     COMMAND ${CMAKE_COMMAND} -E copy
         $<TARGET_FILE:npu_wrapper>
+        ${CMAKE_SOURCE_DIR}/dist/
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "C:/Users/ser13/Downloads/openvino_genai_windows_2025.4.0.0_x86_64/runtime/bin/intel64/Release"
+        ${CMAKE_SOURCE_DIR}/dist/
+    COMMAND ${CMAKE_COMMAND} -E copy
+        "C:/Windows/System32/msvcp140.dll"
+        ${CMAKE_SOURCE_DIR}/dist/
+    COMMAND ${CMAKE_COMMAND} -E copy
+        "C:/Windows/System32/vcruntime140.dll"
         ${CMAKE_SOURCE_DIR}/dist/
 )
 ```
@@ -426,21 +508,102 @@ add_custom_command(TARGET npu_wrapper POST_BUILD
 
 ## Troubleshooting
 
+### Program exits immediately with no output
+
+**Cause:** Exit code `-1073741515` means DLL entry point not found.
+
+**Solution:**
+```powershell
+# Run build.ps1 first to set up environment
+.\build.ps1
+
+# Then run the executable in the same PowerShell session
+.\dist\npu_wrapper.exe .\models\Qwen2.5-0.5B-Instruct
+```
+
+**Why this happens:**
+- OpenVINO DLLs need environment variables set by `setupvars.bat`
+- `build.ps1` now loads these into your PowerShell session automatically
+- Running the exe in the same session where you ran `build.ps1` should work
+
+**Alternative workaround:**
+```powershell
+# Run everything in one cmd session
+$OV = "C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_2025.4.0.0_x86_64"
+cmd /c "call `"$OV\setupvars.bat`" && cd /d C:\Users\ser13\NPU_Project && .\dist\npu_wrapper.exe .\models\Qwen2.5-0.5B-Instruct"
+```
+
 ### Error: "Could not find a model in the directory"
 
 **Solution:**
-- Check model path is correct: `./models/ModelName_ov/`
-- Verify `openvino_model.xml` exists in that folder
-- Check for typos: `Qwen3_0.6B_ov` (not `Qwen3_0_6B_ov`)
+- Check model path is correct: `./models/Qwen2.5-0.5B-Instruct/`
+- Verify `openvino_model.xml` and `openvino_model.bin` exist in that folder
+- Model folder must contain the full OpenVINO IR format (not just .gguf files)
 
 ### Error: "OpenVINO not found" during build
 
+**Solution 1: Update build.ps1**
+Edit `build.ps1` line 8 with the correct path:
+```powershell
+$OV = "C:\Users\<YourUsername>\Downloads\openvino_genai_windows_2025.4.0.0_x86_64"
+```
+
+**Solution 2: Update CMakeLists.txt**
+Edit `CMakeLists.txt` lines 13-14:
+```cmake
+set(OpenVINO_DIR "C:/Users/<YourUsername>/Downloads/openvino_genai_windows_2025.4.0.0_x86_64/runtime/cmake")
+set(OpenVINOGenAI_DIR "C:/Users/<YourUsername>/Downloads/openvino_genai_windows_2025.4.0.0_x86_64/runtime/cmake")
+```
+
+**Important:** Use forward slashes `/` in CMakeLists.txt, not backslashes `\`
+
+### Error: "setupvars.bat not found" or missing runtime DLLs
+
+**Cause:** You downloaded the PyPI package instead of the Archive Installation.
+
+**How to check:**
+```powershell
+# Navigate to your OpenVINO folder
+cd C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_2025.4.0.0_x86_64
+
+# Check for these files/folders:
+ls setupvars.bat                    # Should exist at root
+ls runtime\bin\intel64\Release\     # Should contain .dll files
+ls runtime\cmake\                   # Should contain .cmake files
+```
+
 **Solution:**
-- Verify OpenVINO path in `CMakeLists.txt` (lines 7-8):
-  ```cmake
-  set(OpenVINO_DIR "C:/Users/<YourUsername>/Downloads/openvino_genai_windows_2025.4.0.0_x86_64/runtime/cmake")
-  ```
-- Replace `<YourUsername>` with your actual Windows username
+1. Delete the existing OpenVINO folder
+2. Go to [OpenVINO GenAI GitHub Releases](https://github.com/openvinotoolkit/openvino.genai/releases)
+3. Download **Release 2025.4.0.0** - `openvino_genai_windows_2025.4.0.0_x86_64.zip`
+4. Extract to `C:\Users\<YourUsername>\Downloads\`
+5. Verify the folder structure matches above
+
+**Note:** Don't use curl/wget commands from documentation as they may point to wrong versions (e.g., 2024.6.0.0 instead of 2025.4.0.0).
+
+**Note:** Running `pip install openvino-genai` only installs Python bindings, not the C++ runtime needed for this project.
+
+### Error: Wrong OpenVINO version installed
+
+**Symptoms:**
+- Build succeeds but executable crashes with DLL errors
+- Missing functions or incompatible library messages
+- setupvars.bat exists but wrong version number
+
+**How to check your version:**
+```powershell
+# Look at the folder name:
+ls C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_*
+
+# Should show: openvino_genai_windows_2025.4.0.0_x86_64
+# NOT: openvino_genai_windows_2024.6.0.0_x86_64 or other versions
+```
+
+**Solution:**
+1. Delete the wrong version folder
+2. Download the correct version from [GitHub Releases - 2025.4.0.0](https://github.com/openvinotoolkit/openvino.genai/releases/tag/2025.4.0.0)
+3. Update paths in `CMakeLists.txt` and `build.ps1` if needed
+4. Run `.\build.ps1 -Clean`
 
 ### Build fails with linker errors ("undefined reference to `__imp__...")
 
@@ -477,12 +640,12 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 | Command | Purpose |
 |---------|---------|
-| `cmake --build build --config Release` | Rebuild after code changes |
-| `.\dist\npu_wrapper.exe ./models/ModelName_ov` | Run a model |
+| `.\build.ps1` | Build project (sets up OpenVINO env automatically) |
+| `.\build.ps1 -Clean` | Clean rebuild (deletes build folder first) |
+| `.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct` | Run the model |
 | `.\venv\Scripts\Activate.ps1` | Activate Python virtual environment |
 | `pip install optimum[openvino]` | Install model conversion tools |
 | `optimum-cli export openvino --model <HF-ID> ./models/output` | Convert model to OpenVINO |
-| `rm -r build` | Clean build directory |
 
 ---
 
@@ -515,6 +678,41 @@ Benchmark Timing + Logging
     ↓
 Display to user + `runlog.txt` (if error)
 ```
+
+---
+
+---
+
+## Pushing to GitHub
+
+### Files to Push
+
+**Essential files:**
+```
+CMakeLists.txt
+build.ps1
+README.md
+.gitignore
+src/main.cpp
+```
+
+**DO NOT push:**
+- `build/` - Build artifacts (auto-generated)
+- `dist/` - Compiled executables and DLLs (auto-generated)
+- `venv/` - Python virtual environment (recreate on each machine)
+- `models/` - Model files (too large, download separately)
+- `*.exe`, `*.dll`, `*.obj` - Binaries
+- `runlog.txt` - Log file (auto-deleted after successful runs)
+
+The `.gitignore` file is already configured to ignore these automatically.
+
+### Before Pushing
+
+Make sure to update hardcoded paths in `CMakeLists.txt`:
+- Replace `C:/Users/ser13/` with `C:/Users/<YourUsername>/`
+- Or document the required path in README
+
+The `build.ps1` script already uses `$env:USERNAME` so it's portable.
 
 ---
 
