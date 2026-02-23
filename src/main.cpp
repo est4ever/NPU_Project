@@ -1,11 +1,8 @@
-#include <openvino/runtime/core.hpp>
-
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <windows.h>
 
-#include "../OpenVINO/Backend/OpenVINOBackend.h"
 #include "../OpenVINO/Backend/BackendPool.h"
 #include "../OpenVINO/Scheduler/OpenVINOScheduler.h"
 
@@ -14,6 +11,18 @@
 #include <string>
 #include <fstream>
 #include <filesystem>
+#include <cstdio>
+
+// Static initialization debug - writes to file before main() is called
+namespace {
+    struct DebugInit {
+        DebugInit() {
+            std::ofstream f("debug_init.txt");
+            f << "Global initialization reached at module load\n";
+            f.flush();
+        }
+    } debug_instance;
+}
 
 // Append logs to runlog.txt (handy when dist runs outside VSCode)
 static void logline(const std::string& s) {
@@ -68,6 +77,14 @@ static bool has_benchmark_flag(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
+    // Disable output buffering
+    std::cout.setf(std::ios::unitbuf);
+    std::cerr.setf(std::ios::unitbuf);
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    
+    std::cerr << "=== PROGRAM STARTED ===" << std::endl;
+    
     // Check command line arguments
     if (argc < 2) {
         std::cerr << "Usage: npu_wrapper.exe <model_path> [options]\n";
@@ -216,8 +233,10 @@ int main(int argc, char** argv) {
             std::cout << "Device chosen: " << device << "\n" << std::flush;
             logline("Device chosen: " + device);
             
-            OpenVINOBackend backend;
-            backend.load_model(model_dir, device);
+            // Use BackendPool for single-device mode (maintains abstraction layer)
+            BackendPool pool;
+            pool.load_on_devices(model_dir, {device});
+            pool.set_active_device(device);
 
             std::cout << "READY. Type prompt (exit to quit)\n" << std::flush;
             logline("READY.");
@@ -229,12 +248,12 @@ int main(int argc, char** argv) {
                 if (prompt == "exit") break;
 
                 if (prompt == "stats") {
-                    backend.print_stats();
+                    pool.print_stats();
                     continue;
                 }
 
                 auto start_time = std::chrono::high_resolution_clock::now();
-                backend.generate_stream(prompt);
+                pool.generate_stream(prompt);
                 
                 auto end_time = std::chrono::high_resolution_clock::now();
                 double elapsed = std::chrono::duration<double>(end_time - start_time).count();
@@ -250,6 +269,10 @@ int main(int argc, char** argv) {
         std::cout << "\nPress Enter to exit...\n";
         std::string dummy;
         std::getline(std::cin, dummy);
+        return 1;
+    } catch (...) {
+        std::cerr << "\nUnknown exception caught!\n";
+        logline("Unknown exception caught");
         return 1;
     }
 
