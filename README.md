@@ -6,11 +6,14 @@ A minimal C++ CLI wrapper that runs **OpenVINO GenAI LLMs** (OpenVINO-exported m
 
 ## What This Project Does
 
-- Loads OpenVINO GenAI LLMs from folders like `./models/TinyLlama_ov`
-- Auto-detects devices and prioritizes NPU when available (otherwise defaults to CPU)
-- Lists all available devices (CPU, GPU, NPU) in output
-- Interactive terminal-based prompting with automatic NPU→CPU fallback on error
+- Loads OpenVINO GenAI LLMs from folders like `./models/Qwen2.5-0.5B-Instruct`
+- **Scheduler-based device selection** with three policies: BATTERY_SAVER (NPU-first), PERFORMANCE (GPU-first), BALANCED (AUTO heterogeneous)
+- **Multi-device execution mode** (`--benchmark`): Runs 2-second benchmarks on all devices, loads model on all of them, and allows runtime switching
+- Auto-detects available hardware and applies policy-based routing
+- Interactive terminal-based prompting with automatic fallback on device errors
 - Real-time benchmarking: shows execution time after each generation
+- `stats` command prints OpenVINO GenAI performance metrics (TTFT, TPOT, throughput)
+- Clean backend interface (`IBackend.h`) and scheduler interface (`IScheduler.h`) with OpenVINO implementations
 - Auto-cleanup: deletes log files on successful exit (keeps them on errors for debugging)
 
 ---
@@ -199,40 +202,208 @@ The build script will:
 
 ### Running the Model
 
+**Single-Device Mode (default):**
 ```powershell
-# Run with Qwen2.5-0.5B-Instruct
+# Run with default policy (BATTERY_SAVER = prioritize NPU)
 .\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct
 
-# Run with TinyLlama (if you have it)
-.\dist\npu_wrapper.exe ./models/TinyLlama_ov
+# Run with specific policy
+.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --policy PERFORMANCE    # GPU preferred
+.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --policy BATTERY_SAVER  # NPU preferred
+.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --policy BALANCED       # AUTO heterogeneous
+
+# Force device selection (overrides policy)
+.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --device NPU
+.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --device CPU
+.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --device GPU
 ```
+
+**Multi-Device Benchmark Mode:**
+```powershell
+# Run benchmarks and load on all devices (CPU, GPU, NPU)
+.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --benchmark
+
+# Benchmark with specific policy for device selection
+.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --benchmark --policy PERFORMANCE
+```
+
+In benchmark mode:
+- Runs a 2-second test on each available device (CPU, GPU, NPU)
+- Loads the model on **all** tested devices simultaneously
+- Selects the best device based on measured TTFT and throughput
+- Allows runtime device switching with the `switch [device]` command
+
+### Device Scheduling Policies
+
+The scheduler uses **EnginePolicy** to intelligently select hardware:
+
+| Policy | Behavior | Best For |
+|---|---|---|
+| **BATTERY_SAVER** (default) | NPU preferred, fallback CPU | Battery-powered devices, power efficiency |
+| **PERFORMANCE** | GPU preferred, fallback CPU | High-speed inference, low latency |
+| **BALANCED** | AUTO heterogeneous GPU→NPU→CPU | Mixed workloads with diverse hardware |
+
+The `--device` flag **overrides** policy selection if provided.
+
+### Automatic Device Switching (Multi-Device Mode)
+
+When running with `--benchmark`, the system enables **automatic device switching** by default. After each generation, it monitors performance and switches devices if:
+
+**Trigger conditions:**
+- **TTFT degradation**: Current TTFT exceeds benchmark by 50% or more
+- **Throughput drop**: Current throughput falls below 70% of benchmark
+- **Better alternative**: Another device is at least 20% faster
+
+**Example scenario:**
+```
+You start on NPU (best for battery)
+  ↓
+User enters a very long prompt
+  ↓
+NPU struggles → TTFT: 892ms (benchmark was 189ms)
+  ↓
+System detects: "TTFT degraded by 370%"
+  ↓
+Checks GPU: benchmark shows 156ms TTFT, ~79 tok/s
+  ↓
+Switches to GPU automatically
+  ↓
+Next prompts stay on GPU until performance improves
+```
+
+**Manual control:**
+- Type `auto` to toggle automatic switching on/off
+- Type `switch [device]` to manually select a device
+- Prompt shows `AUTO` indicator when auto-switching is enabled: `You [GPU AUTO]:`
 
 ### Expected Output
 
+**Single-Device Mode:**
 ```
 MAIN STARTED
 Model dir: ./models/Qwen2.5-0.5B-Instruct
-Available devices:
-  - CPU
-  - GPU
-Device chosen: CPU
+Policy: BATTERY_SAVER
 
-Running warm-up...
+[Scheduler] Hardware Discovered:
+  - CPU : Intel(R) Core(TM) i7-13700K
+  - GPU : Intel(R) Arc(TM) A770M
+  - NPU : Intel(R) AI Boost NPU
+
+[Scheduler] Applying routing policy...
+[Scheduler] Policy: BATTERY SAVER. Routing to NPU.
+Device chosen: NPU
+
+[Backend] Loading model from: ./models/Qwen2.5-0.5B-Instruct to NPU...
+[Backend] Model loaded successfully.
+
 READY. Type prompt (exit to quit)
 
 You: What is 2+2?
-AI: 2 + 2 equals 4.
+Assistant: 2 + 2 equals 4.
 [Time: 1.234 seconds]
+
+You: stats
+--- Hardware Performance Stats ---
+Time To First Token (TTFT): 45.32 ms
+Time Per Output Token (TPOT): 12.15 ms/token
+Throughput: 82.35 tokens/s
+----------------------------------
 
 You: exit
 ```
 
+**Multi-Device Benchmark Mode:**
+```
+MAIN STARTED
+Model dir: ./models/Qwen2.5-0.5B-Instruct
+Policy: BATTERY_SAVER
+
+[Scheduler] Hardware Discovered:
+  - CPU : Intel(R) Core(TM) i7-13700K
+  - GPU : Intel(R) Arc(TM) A770M
+  - NPU : Intel(R) AI Boost NPU
+
+[MULTI-DEVICE MODE ENABLED]
+
+[Scheduler] Starting device benchmarks (2 sec per device)...
+[Scheduler] Testing CPU... ✓ TTFT: 234.5 ms, Throughput: 45.2 tok/s
+[Scheduler] Testing GPU... ✓ TTFT: 156.3 ms, Throughput: 78.9 tok/s
+[Scheduler] Testing NPU... ✓ TTFT: 189.7 ms, Throughput: 62.4 tok/s
+[Scheduler] Benchmarking complete.
+
+[Scheduler] Selecting best device based on benchmarks and policy...
+  - CPU: score = 45.2
+  - GPU: score = 39.45
+  - NPU: score = 1000062.4
+[Scheduler] Selected: NPU (score: 1000062.4)
+
+[BackendPool] Loading model on 3 device(s)...
+[Backend] Loading model from: ./models/Qwen2.5-0.5B-Instruct to CPU...
+[Backend] Model loaded successfully.
+[Backend] Loading model from: ./models/Qwen2.5-0.5B-Instruct to GPU...
+[Backend] Model loaded successfully.
+[Backend] Loading model from: ./models/Qwen2.5-0.5B-Instruct to NPU...
+[Backend] Model loaded successfully.
+[BackendPool] Successfully loaded on 3 device(s)
+
+READY. Type prompt (exit to quit, stats/devices/auto/switch [device])
+
+You [NPU AUTO]: What is 2+2?
+Assistant: 2 + 2 equals 4.
+[Device: NPU, Time: 1.234 seconds]
+
+You [NPU AUTO]: Tell me a long story about space exploration.
+Assistant: [generates long response]
+[Auto-Switch] TTFT degraded: 892.5 ms vs benchmark 189.7 ms
+[Auto-Switch] Switching from NPU to GPU (expected +26.5% throughput)
+[BackendPool] Switched to device: GPU
+[Device: GPU, Time: 8.456 seconds]
+
+You [GPU AUTO]: What is 5+5?
+Assistant: 5 + 5 equals 10.
+[Device: GPU, Time: 0.987 seconds]
+
+You [GPU AUTO]: auto
+[Auto-switching DISABLED]
+
+You [GPU]: switch NPU
+[BackendPool] Switched to device: NPU
+
+You [NPU]: devices
+Loaded devices:
+  - CPU
+  - GPU
+  - NPU (active)
+
+You [NPU]: stats
+[Device: NPU]
+--- Hardware Performance Stats ---
+Time To First Token (TTFT): 45.32 ms
+Time Per Output Token (TPOT): 12.15 ms/token
+Throughput: 82.35 tokens/s
+----------------------------------
+
+You [NPU]: auto
+[Auto-switching ENABLED]
+
+You [NPU AUTO]: exit
+```
+
 **Features:**
-1. Auto-selects best device (NPU > GPU > CPU)
-2. Runs warm-up generation to stabilize performance
-3. Shows execution time after each response: `[Time: X.XXX seconds]`
-4. Auto-deletes `runlog.txt` on successful exit
-5. Keeps `runlog.txt` if there's an error (for debugging)
+1. Device discovery and intelligent scheduling based on policy
+2. Multi-device mode: benchmark all devices, load on all
+3. **Automatic device switching**: Monitors performance after each generation and switches if current device underperforms
+4. Auto-switching triggers when:
+   - TTFT exceeds benchmark by 50% or more
+   - Throughput drops below 70% of benchmark
+   - Alternative device is at least 20% faster
+5. Shows execution time after each response: `[Time: X.XXX seconds]`
+6. `stats` prints OpenVINO GenAI TTFT/TPOT/throughput metrics
+7. `switch [device]` manually changes active device
+8. `devices` lists all loaded devices
+9. `auto` toggles automatic device switching on/off (enabled by default)
+10. Auto-deletes `runlog.txt` on successful exit
+11. Keeps `runlog.txt` if there's an error (for debugging)
 
 ---
 
@@ -307,46 +478,160 @@ cmd /c "call `"$OV\setupvars.bat`" && cd /d C:\Users\ser13\NPU_Project && cmake 
 
 ---
 
+## Architecture Overview
+
+The project is organized in layers:
+
+**Single-Device Mode:**
+```
+┌─────────────────────────────────┐
+│       src/main.cpp              │ REPL, command parsing, stats
+│     (Orchestration Layer)       │
+└────────────┬────────────────────┘
+             │ Calls
+             ↓
+┌─────────────────────────────────┐
+│    OpenVINOScheduler             │ Device discovery & policy routing
+│  (Device Scheduling Layer)      │ (IScheduler interface)
+└────────────┬────────────────────┘
+             │ Chooses device
+             ↓
+┌─────────────────────────────────┐
+│    OpenVINOBackend               │ Model loading & token streaming
+│ (OpenVINO Inference Layer)      │ (IBackend interface)
+└────────────┬────────────────────┘
+             │ Wraps
+             ↓
+┌─────────────────────────────────┐
+│  ov::genai::LLMPipeline          │ OpenVINO GenAI C++ SDK
+│ (Hardware Runtime)              │
+└─────────────────────────────────┘
+```
+
+**Multi-Device Mode (--benchmark):**
+```
+┌─────────────────────────────────────────────────────────┐
+│                   src/main.cpp                          │
+│      (Orchestration + Multi-Device Routing)             │
+└────────────┬────────────────────────────────────────────┘
+             │ Uses
+             ↓
+┌─────────────────────────────────────────────────────────┐
+│              OpenVINOScheduler                          │
+│  • discover_devices()                                   │
+│  • benchmark_devices()  ← Runs 2-sec tests on each      │
+│  • get_best_device_from_benchmarks()                    │
+└────────────┬────────────────────────────────────────────┘
+             │ Recommends devices
+             ↓
+┌─────────────────────────────────────────────────────────┐
+│                 BackendPool                             │
+│  Manages multiple OpenVINOBackend instances             │
+│  • load_on_devices([CPU, GPU, NPU])                     │
+│  • set_active_device() ← Runtime switching              │
+│  • generate_stream() → delegates to active backend      │
+└────────────┬────────────────────────────────────────────┘
+             │ Contains
+             ↓
+┌──────────────────┬──────────────────┬──────────────────┐
+│  OpenVINOBackend │  OpenVINOBackend │  OpenVINOBackend │
+│     (CPU)        │     (GPU)        │     (NPU)        │
+└────────┬─────────┴────────┬─────────┴────────┬─────────┘
+         │                  │                  │
+         ↓                  ↓                  ↓
+┌────────────────┬──────────────────┬──────────────────┐
+│ LLMPipeline    │ LLMPipeline      │ LLMPipeline      │
+│   (CPU)        │   (GPU)          │   (NPU)          │
+└────────────────┴──────────────────┴──────────────────┘
+```
+
+**Key files:**
+- `OpenVINO/Scheduler/IScheduler.h` — Abstract device scheduler (defines `EnginePolicy`, `DeviceBenchmark`)
+- `OpenVINO/Scheduler/OpenVINOScheduler.{h,cpp}` — Concrete scheduler with benchmarking
+- `OpenVINO/Backend/IBackend.h` — Abstract inference backend
+- `OpenVINO/Backend/OpenVINOBackend.{h,cpp}` — Concrete backend wrapping LLMPipeline
+- `OpenVINO/Backend/BackendPool.{h,cpp}` — Multi-backend manager for device switching
+- `src/main.cpp` — REPL and command-line interface
+
+---
+
 ## Code Features & Configuration
 
 ### Built-in Features
 
-**Your code includes these features (see `src/main.cpp`):**
+**Your code includes these features (see `src/main.cpp`, `OpenVINOScheduler.cpp`, and `OpenVINOBackend.cpp`):**
 
 | Feature | What It Does |
 |---------|---|
+| **Scheduler Interface** | `IScheduler.h` defines device discovery and policy-based routing, implemented by `OpenVINOScheduler` |
+| **Backend Interface** | `IBackend.h` defines the inference API, implemented by `OpenVINOBackend` |
+| **Device Policies** | BATTERY_SAVER (NPU-first), PERFORMANCE (GPU-first), BALANCED (AUTO heterogeneous) |
 | **Turn Marker Detection** | Auto-stops generation when model tries to start a new dialogue turn (detects `\nYou:`, `\nUser:`, `\nAI:`) |
 | **Auto-Device Fallback** | If NPU fails, automatically retries on CPU |
 | **Token Streaming** | Outputs tokens in real-time as they're generated |
 | **Execution Benchmarking** | Shows timing for each generation: `[Time: X.XXX seconds]` |
+| **Perf Stats Command** | `stats` prints TTFT/TPOT/throughput from OpenVINO GenAI |
 | **Automatic Logging** | Logs all activity to `runlog.txt` in project root (auto-deleted on success, kept on error) |
-| **Warm-up Run** | First generation runs silently with "Hello" prompt to stabilize device |
-| **Exe Path Detection** | Can show executable location for debugging (see code comment) |
 
-### Device Selection Logic
+### Device Selection & Scheduling
 
-**The code implements this priority:**
+**The code uses a three-tier system:**
 
-1. Scan all available devices (CPU, GPU, NPU, etc.)
-2. Print all detected devices
-3. If **NPU found** → use NPU
-4. If **NPU not found** → use CPU (even if GPU is available)
+1. **Scheduler discovery** — `OpenVINOScheduler` scans all available devices via `ov::Core::get_available_devices()`
+2. **Policy routing** — Based on the `--policy` flag, choose the optimal device:
+   - `BATTERY_SAVER` (default): Return NPU if available, else CPU
+   - `PERFORMANCE`: Return GPU if available, else CPU
+   - `BALANCED`: Return `AUTO:GPU,NPU,CPU` for OpenVINO heterogeneous routing
+3. **Override option** — `--device` flag bypasses policy and forces a specific device
 
 ```cpp
-// From src/main.cpp pick_device_and_print()
-std::string chosen = "CPU";  // Default
-for (const auto& d : devs) {
-    if (d.find("NPU") != std::string::npos) {
-        chosen = "NPU";  // Switch to NPU if found
-    }
+// From OpenVINOScheduler.cpp
+switch (policy) {
+    case EnginePolicy::PERFORMANCE:
+        return has_gpu ? "GPU" : "CPU";
+    case EnginePolicy::BATTERY_SAVER:
+        return has_npu ? "NPU" : "CPU";
+    case EnginePolicy::BALANCED:
+    default:
+        return "AUTO:GPU,NPU,CPU";
 }
 ```
 
-**Note:** GPU devices will be listed in output, but the selection logic doesn't explicitly branch on GPU. Primary goal is NPU support with CPU as reliable fallback.
+**Priority within each policy:**
+- **Policies are explicit**, not nested. Each one has its own logic.
+- `--device` always wins if provided (overrides `--policy`).
+
+### Example Device Selection Flow
+
+```
+User runs: npu_wrapper.exe ./models/Qwen2.5 --policy BATTERY_SAVER
+    ↓
+Scheduler discovers: [CPU, GPU, NPU]
+    ↓
+Policy = BATTERY_SAVER → find NPU?
+    ↓
+Yes → Device = "NPU"
+    ↓
+Load model on NPU
+```
+
+Another example with override:
+
+```
+User runs: npu_wrapper.exe ./models/Qwen2.5 --policy PERFORMANCE --device CPU
+    ↓
+Scheduler discovers: [CPU, GPU, NPU]
+    ↓
+Policy = PERFORMANCE → GPU preferred
+    ↓
+Override detected! Device = "CPU" (from --device flag)
+    ↓
+Load model on CPU (ignoring policy)
+```
 
 ### Model Path in Help Message
 
-The executable's help message shows an example with an older model name:
+The executable's help message shows the correct usage:
 
 ```cpp
 // src/main.cpp line ~50
@@ -361,15 +646,12 @@ The executable's help message shows an example with an older model name:
 
 ---
 
-These values are in `src/main.cpp` and can be customized:
+These values are in `OpenVINOBackend.cpp` and can be customized:
 
 ```cpp
-// Line 75-76: Main generation settings
+// Main generation settings
 cfg.max_new_tokens = 128;      // Max tokens to generate per prompt
 cfg.temperature = 0.7f;        // Creativity level (0.0 = deterministic, 1.0+ = creative)
-
-// Line 76: CPU fallback uses lower token limit
-cfg.max_new_tokens = 64;       // (only when NPU fails and falls back to CPU)
 ```
 
 **To change these values:**
@@ -643,6 +925,8 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 | `.\build.ps1` | Build project (sets up OpenVINO env automatically) |
 | `.\build.ps1 -Clean` | Clean rebuild (deletes build folder first) |
 | `.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct` | Run the model |
+| `\.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --device NPU` | Run on NPU |
+| `\.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --device CPU` | Run on CPU |
 | `.\venv\Scripts\Activate.ps1` | Activate Python virtual environment |
 | `pip install optimum[openvino]` | Install model conversion tools |
 | `optimum-cli export openvino --model <HF-ID> ./models/output` | Convert model to OpenVINO |
