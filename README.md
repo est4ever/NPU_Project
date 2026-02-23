@@ -202,36 +202,86 @@ The build script will:
 
 ### Running the Model
 
-**Single-Device Mode (default):**
+> **Easiest Way:** Use the `run.ps1` wrapper script - it handles all environment setup automatically!
+
+#### Quick Start (Recommended)
+
 ```powershell
-# Run with default policy (BATTERY_SAVER = prioritize NPU)
-.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct
+cd C:\Users\<YourUsername>\NPU_Project
 
-# Run with specific policy
-.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --policy PERFORMANCE    # GPU preferred
-.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --policy BATTERY_SAVER  # NPU preferred
-.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --policy BALANCED       # AUTO heterogeneous
-
-# Force device selection (overrides policy)
-.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --device NPU
-.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --device CPU
-.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --device GPU
+# Run with any arguments you want - environment setup is automatic
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --policy PERFORMANCE
 ```
 
-**Multi-Device Benchmark Mode:**
-```powershell
-# Run benchmarks and load on all devices (CPU, GPU, NPU)
-.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --benchmark
+That's it! The `run.ps1` script automatically:
+- Loads the OpenVINO environment
+- Runs the executable with your arguments
+- No manual environment setup needed
 
-# Benchmark with specific policy for device selection
-.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --benchmark --policy PERFORMANCE
+#### Usage Examples
+
+```powershell
+# Default policy (BATTERY_SAVER = prioritize NPU)
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct
+
+# PERFORMANCE policy (GPU preferred)
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --policy PERFORMANCE
+
+# BATTERY_SAVER policy (NPU preferred)
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --policy BATTERY_SAVER
+
+# BALANCED policy (AUTO heterogeneous)
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --policy BALANCED
+
+# Force specific device
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --device NPU
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --device GPU
+
+# Benchmark mode (test all devices)
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --benchmark
+
+# Benchmark with PERFORMANCE policy
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --benchmark --policy PERFORMANCE
 ```
+
+#### Alternative: Manual Environment Setup
+
+If you prefer to set up the environment manually:
+
+```powershell
+cd C:\Users\<YourUsername>\NPU_Project
+
+# Activate venv
+.\venv\Scripts\Activate.ps1
+
+# Load OpenVINO environment
+cmd /c "call C:\Users\<YourUsername>\Downloads\openvino_genai_windows_2025.4.0.0_x86_64\setupvars.bat"
+
+# Run the executable
+.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --policy PERFORMANCE
+```
+
 
 In benchmark mode:
 - Runs a 2-second test on each available device (CPU, GPU, NPU)
 - Loads the model on **all** tested devices simultaneously
 - Selects the best device based on measured TTFT and throughput
 - Allows runtime device switching with the `switch [device]` command
+- Shows instant throughput metrics after each generation
+
+**Example Benchmark Output:**
+```
+[Scheduler] Starting device benchmarks (2 sec per device)...
+[Scheduler] Testing CPU... TTFT: 535.354 ms, Throughput: 44.1819 tok/s
+[Scheduler] Testing GPU... TTFT: 143.247 ms, Throughput: 54.5372 tok/s
+[Scheduler] Testing NPU... TTFT: 268.961 ms, Throughput: 61.3961 tok/s
+
+[Scheduler] Selecting best device based on benchmarks and policy...
+  - CPU: score = 44.1819
+  - GPU: score = 54.5372
+  - NPU: score = 61.3961
+[Scheduler] Selected: NPU (score: 61.3961)
+```
 
 ### Device Scheduling Policies
 
@@ -792,28 +842,33 @@ add_custom_command(TARGET npu_wrapper POST_BUILD
 
 ### Program exits immediately with no output
 
-**Cause:** Exit code `-1073741515` means DLL entry point not found.
+**Cause:** Exit code `-1073741515` (or other errors) means OpenVINO DLLs are not found.
 
-**Solution:**
+**Solution (Easiest):**
+Use the `run.ps1` wrapper script which handles all environment setup:
+
 ```powershell
-# Run build.ps1 first to set up environment
-.\build.ps1
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --policy PERFORMANCE
+```
 
-# Then run the executable in the same PowerShell session
-.\dist\npu_wrapper.exe .\models\Qwen2.5-0.5B-Instruct
+Or if that doesn't work, run it step-by-step:
+
+```powershell
+# Step 1: Activate virtual environment
+.\venv\Scripts\Activate.ps1
+
+# Step 2: Load OpenVINO environment
+cmd /c "call C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_2025.4.0.0_x86_64\setupvars.bat"
+
+# Step 3: Run the executable
+.\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct
 ```
 
 **Why this happens:**
-- OpenVINO DLLs need environment variables set by `setupvars.bat`
-- `build.ps1` now loads these into your PowerShell session automatically
-- Running the exe in the same session where you ran `build.ps1` should work
-
-**Alternative workaround:**
-```powershell
-# Run everything in one cmd session
-$OV = "C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_2025.4.0.0_x86_64"
-cmd /c "call `"$OV\setupvars.bat`" && cd /d C:\Users\ser13\NPU_Project && .\dist\npu_wrapper.exe .\models\Qwen2.5-0.5B-Instruct"
-```
+- OpenVINO DLLs require environment variables set by `setupvars.bat`
+- Python venv may be needed for implicit dependencies
+- Running `.exe` alone without these setup steps will fail
+- The `run.ps1` script automates all of this for you
 
 ### Error: "Could not find a model in the directory"
 
