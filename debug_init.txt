@@ -1,0 +1,1 @@
+Global initialization reached at module load
