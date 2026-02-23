@@ -17,7 +17,12 @@ message(STATUS "OpenVINO_DIR = ${OpenVINO_DIR}")
 find_package(OpenVINO CONFIG REQUIRED)
 find_package(OpenVINOGenAI CONFIG REQUIRED)
 
-add_executable(npu_wrapper src/main.cpp)
+add_executable(npu_wrapper
+    src/main.cpp
+    OpenVINO/Backend/OpenVINOBackend.cpp
+    OpenVINO/Backend/BackendPool.cpp
+    OpenVINO/Scheduler/OpenVINOScheduler.cpp
+)
 
 add_custom_command(TARGET npu_wrapper POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
