@@ -9,9 +9,15 @@ A minimal C++ CLI wrapper that runs **OpenVINO GenAI LLMs** (OpenVINO-exported m
 - Loads OpenVINO GenAI LLMs from folders like `./models/Qwen2.5-0.5B-Instruct`
 - **Scheduler-based device selection** with three policies: BATTERY_SAVER (NPU-first), PERFORMANCE (GPU-first), BALANCED (AUTO heterogeneous)
 - **Multi-device execution mode** (`--benchmark`): Runs 2-second benchmarks on all devices, loads model on all of them, and allows runtime switching
+- **REST API Server** (`--server`): OpenAI-compatible HTTP endpoints for external integration
+- **Context-aware routing** (`--context-routing`): Automatically selects best device based on prompt length
+- **Advanced KV-cache** (`--optimize-memory`): INT8 quantization for 50-75% memory savings
 - Auto-detects available hardware and applies policy-based routing
 - Interactive terminal-based prompting with automatic fallback on device errors
 - Real-time benchmarking: shows execution time after each generation
+- `--json` emits NDJSON metrics for UI/automation
+- `--split-prefill` routes long prompts to best TTFT device, short prompts to best throughput device
+- `--speculative` enables OpenVINO's native speculative decoding with draft/verify pipeline and real acceptance metrics
 - `stats` command prints OpenVINO GenAI performance metrics (TTFT, TPOT, throughput)
 - Clean backend interface (`IBackend.h`) and scheduler interface (`IScheduler.h`) with OpenVINO implementations
 - Auto-cleanup: deletes log files on successful exit (keeps them on errors for debugging)
@@ -25,9 +31,35 @@ A minimal C++ CLI wrapper that runs **OpenVINO GenAI LLMs** (OpenVINO-exported m
 | **OS** | Windows 10/11 | Required |
 | **Visual Studio Build Tools** | 2022 (MSVC) | C++ compiler |
 | **CMake** | 3.18+ | Build system |
-| **OpenVINO GenAI** | 2025.4.0.0 | Model inference engine |
+| **OpenVINO GenAI** | 2026.0.0.0 | Model inference engine |
 | **Python** | 3.10+ | Model conversion (optional) |
 | **C++ Standard** | C++17 | Code requirement |
+| **cpp-httplib** | v0.15.3 | HTTP server (auto-fetched via CMake) |
+| **nlohmann/json** | v3.11.3 | JSON parsing (auto-fetched via CMake) |
+| **Windows PSAPI** | Built-in | Memory monitoring for KV-cache |
+
+---
+
+## OpenVINO 2026 API Changes
+
+**Updated for OpenVINO 2026.0.0.0:**
+
+This project has been updated to support OpenVINO GenAI 2026.0.0.0, which introduced breaking API changes:
+
+- **Streaming API:** The new version requires using `TextStreamer` objects instead of lambda functions
+- **Callback Interface:** Callbacks now return `StreamingStatus` enum (RUNNING, STOP, CANCEL) instead of `bool`
+- **Tokenizer Access:** Must explicitly get the tokenizer from the pipeline via `pipe->get_tokenizer()`
+
+**Code Changes Made:**
+- Updated `OpenVINO/Backend/OpenVINOBackend.cpp` to use `ov::genai::TextStreamer`
+- Modified both `generate_stream()` and `generate_output()` methods
+- Changed callback return types from `bool` to `ov::genai::StreamingStatus`
+
+**Migration from 2025.4.0.0 → 2026.0.0.0:**
+- Old: `pipe->generate(prompt, cfg, [&](const std::string& text) { return false; })`
+- New: `pipe->generate(prompt, cfg, std::make_shared<TextStreamer>(tokenizer, callback))`
+
+If you're upgrading from a previous version, ensure you extract the new OpenVINO archive correctly (avoid nested folders) and update all path references in your configuration files.
 
 ---
 
@@ -45,20 +77,20 @@ A minimal C++ CLI wrapper that runs **OpenVINO GenAI LLMs** (OpenVINO-exported m
 2. Run installer
 3. **Important:** Check "Add CMake to system PATH"
 
-#### C. OpenVINO GenAI (2025.4.0.0) - Archive Installation
+#### C. OpenVINO GenAI (2026.0.0.0) - Archive Installation
 
 **Important:** You need the **Archive Installation** (C++ runtime), not just the PyPI package.
 
-**⚠️ Critical: Download the correct version (2025.4.0.0)**
+**⚠️ Critical: Download the correct version (2026.0.0.0)**
 
 The OpenVINO documentation may show curl/wget commands for **different versions** (like 2024.6.0.0). **DO NOT use those commands directly** as they will download the wrong version.
 
 **Correct Download Method:**
 
 1. Go to [OpenVINO GenAI GitHub Releases](https://github.com/openvinotoolkit/openvino.genai/releases)
-2. Find **Release 2025.4.0.0**
-3. Download: `openvino_genai_windows_2025.4.0.0_x86_64.zip`
-4. Extract to: `C:\Users\<YourUsername>\Downloads\openvino_genai_windows_2025.4.0.0_x86_64\`
+2. Find **Release 2026.0.0.0**
+3. Download: `openvino_genai_windows_2026.0.0.0_x86_64.zip`
+4. Extract to: `C:\Users\<YourUsername>\Downloads\openvino_genai_windows_2026.0.0.0_x86_64\`
 5. **Verify:** The extracted folder should contain:
    - `setupvars.bat` (at the root)
    - `runtime/bin/intel64/Release/` (DLLs)
@@ -124,8 +156,8 @@ pip install optimum[openvino] torch transformers
 
 Edit `CMakeLists.txt` lines 13-14 and replace `ser13` with your Windows username:
 ```cmake
-set(OpenVINO_DIR "C:/Users/<YourUsername>/Downloads/openvino_genai_windows_2025.4.0.0_x86_64/runtime/cmake")
-set(OpenVINOGenAI_DIR "C:/Users/<YourUsername>/Downloads/openvino_genai_windows_2025.4.0.0_x86_64/runtime/cmake")
+set(OpenVINO_DIR "C:/Users/<YourUsername>/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/cmake")
+set(OpenVINOGenAI_DIR "C:/Users/<YourUsername>/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/cmake")
 ```
 
 **Important:** Use forward slashes `/` not backslashes `\` in CMakeLists.txt.
@@ -242,7 +274,337 @@ That's it! The `run.ps1` script automatically:
 
 # Benchmark with PERFORMANCE policy
 .\run.ps1 ./models/Qwen2.5-0.5B-Instruct --benchmark --policy PERFORMANCE
+
+# NDJSON metrics (one JSON line per generation, printed to stderr)
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --json
+
+# Split prefill vs decode routing (long prompts -> best TTFT device)
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --benchmark --split-prefill --prefill-threshold 256
+
+# Calibrate a good prefill threshold and exit
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --calibrate-prefill
+
+# Speculative decoding with real metrics
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --speculative --draft-model ./models/Qwen2.5-0.5B-Instruct --draft-device CPU --verify-device CPU --draft-k 4 --json 2> spec_metrics.ndjson
 ```
+
+#### JSON Metrics (NDJSON)
+
+Use `--json` to emit **one JSON line per generation** to `stderr`. This keeps normal assistant text on `stdout` and makes the output easy to pipe into tools or a UI.
+
+**Fields:**
+- `schema` (number)
+- `ts` (unix epoch ms)
+- `model` (string)
+- `device` (string)
+- `policy` (string)
+- `ttft_ms`, `tpot_ms`, `throughput_tok_s`, `total_ms` (number or null)
+- `prompt_tokens`, `generated_tokens` (number or null)
+- `token_count_source` (string: `openvino_native`, `estimated`, `unknown`)
+- `throughput_derived` (bool or null)
+- `speculative_requested`, `speculative_active` (bool)
+- `draft_k` (number or null)
+- `draft_model`, `draft_device`, `verify_device` (string or null)
+- `accept_rate` (number or null)
+- `accepted_tokens`, `proposed_tokens` (number or null)
+- `spec_disabled_reason` (string or null)
+- `fallback_used` (bool)
+- `error` (string or null)
+
+**Example output:**
+```json
+{"schema":1,"ts":1739999999000,"model":"Qwen2.5-0.5B-Instruct","device":"NPU","policy":"PERFORMANCE","ttft_ms":124.531,"tpot_ms":13.902,"throughput_tok_s":71.942,"total_ms":1012.300,"prompt_tokens":18,"generated_tokens":64,"token_count_source":"openvino_native","throughput_derived":false,"speculative_requested":false,"speculative_active":false,"draft_k":null,"draft_model":null,"draft_device":null,"verify_device":null,"accept_rate":null,"accepted_tokens":null,"proposed_tokens":null,"spec_disabled_reason":null,"fallback_used":false,"error":null}
+```
+
+**Redirect to a file (PowerShell):**
+```powershell
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --json 2> metrics.ndjson
+```
+
+#### Split Prefill vs Decode Routing
+
+Use `--split-prefill` to route long prompts to the device with the best **TTFT** and short prompts to the device with the best **throughput**. In benchmark mode, the routing uses the benchmark results. Outside benchmark mode, it prefers GPU for TTFT and NPU for throughput if available.
+
+**Options:**
+- `--split-prefill` (enable routing)
+- `--prefill-threshold N` (token threshold, default 256)
+
+**Notes:**
+- Prompt length uses a lightweight token estimate (whitespace token count). It does not load a tokenizer.
+- If you pass `--device`, split-prefill is disabled.
+
+#### Speculative Decoding
+
+Use `--speculative` to enable **OpenVINO's native speculative decoding** with draft token proposal and verification. The wrapper uses `ov::genai::LLMPipeline` with integrated draft model support for optimal performance.
+
+**Real Metrics Tracked:**
+- `accept_rate`: Ratio of draft tokens verified successfully by main model
+- `accepted_tokens`: Number of draft tokens that matched main model output
+- `proposed_tokens`: Total draft tokens proposed per iteration
+- `spec_disabled_reason`: Why speculative decoding was disabled (if applicable)
+
+**Options:**
+- `--speculative` (enable speculative decoding)
+- `--draft-model PATH` (path to draft model, required)
+- `--draft-device DEVICE` (device for draft model, e.g., `NPU` or `CPU`)
+- `--verify-device DEVICE` (device for main model, defaults to policy selection)
+- `--draft-k N` (draft tokens per iteration, default 5; typical range 3–8)
+- `--min-accept X` (acceptance rate threshold for auto-disable, default 0.55)
+- `--spec-disable-on-low-accept` (auto-disable if acceptance rate drops below threshold)
+
+**Example:**
+```powershell
+# Typical setup: draft on NPU (low latency), verify on GPU (high throughput)
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct `
+  --speculative `
+  --draft-model ./models/Qwen2.5-0.5B-Instruct `
+  --draft-device NPU `
+  --verify-device GPU `
+  --draft-k 4 `
+  --json 2> metrics.ndjson
+```
+
+**Metrics Example:**
+```json
+{
+  "speculative_requested": true,
+  "speculative_active": true,
+  "draft_k": 4,
+  "accept_rate": 0.75,
+  "accepted_tokens": 15,
+  "proposed_tokens": 20,
+  "generated_tokens": 20
+}
+```
+
+**Notes:**
+- `--device` acts as an alias for `--verify-device` when `--speculative` is set.
+- In benchmark mode, verify defaults to the best benchmarked device unless overridden.
+- Accept rate is updated in real time and available in NDJSON output per generation.
+
+---
+
+## Advanced Features
+
+### REST API Server Mode (OpenAI-Compatible)
+
+Run the wrapper as an **HTTP server** with OpenAI-compatible endpoints for integration with external applications, UIs, or automation tools.
+
+**Quick Start:**
+```powershell
+# Start server on default port 8080
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --server
+
+# Custom port
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --server --port 3000
+
+# Server with advanced features
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --server --optimize-memory --context-routing
+```
+
+**REST Endpoints:**
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/v1/chat/completions` | Generate chat completions (OpenAI format) |
+| GET | `/v1/models` | List available models |
+| GET | `/health` | Health check with active backend info |
+
+**Example Request:**
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openvino-local",
+    "messages": [
+      {"role": "system", "content": "You are a helpful assistant."},
+      {"role": "user", "content": "Explain quantum computing in simple terms"}
+    ],
+    "max_tokens": 150,
+    "temperature": 0.7
+  }'
+```
+
+**Example Response:**
+```json
+{
+  "id": "chatcmpl-1739999999000",
+  "object": "chat.completion",
+  "created": 1739999999,
+  "model": "openvino-local",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": "Quantum computing uses qubits that can exist in multiple states..."
+    },
+    "finish_reason": "stop"
+  }],
+  "usage": {
+    "prompt_tokens": 0,
+    "completion_tokens": 28,
+    "total_tokens": 28
+  }
+}
+```
+
+**Features:**
+- **OpenAI-compatible JSON format** - works with existing OpenAI client libraries
+- **CORS enabled** - allows browser-based applications
+- **Automatic error handling** - returns structured error responses
+- **Thread-safe** - handles concurrent requests via backend pool
+- **Dependencies auto-fetched** - uses CMake FetchContent for cpp-httplib and nlohmann/json
+
+**Notes:**
+- Server mode disables the interactive REPL
+- Uses the active backend selected by policy/device flags
+- Combine with `--benchmark` to enable runtime device switching
+- Streaming support (SSE) is work-in-progress
+
+### Context-Aware Device Routing
+
+Automatically route prompts to the **optimal device** based on estimated context length, applying intelligent thresholds for different prompt sizes.
+
+**Enable:**
+```powershell
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --context-routing
+```
+
+**How It Works:**
+
+The scheduler analyzes prompt length and routes based on device characteristics:
+
+| Context Size | Threshold | Best Device | Reasoning |
+|--------------|-----------|-------------|-----------|
+| **Short** | < 100 tokens | NPU | Minimal overhead, best latency |
+| **Medium** | 100-500 tokens | GPU or CPU | Balanced throughput |
+| **Long** | 500-2000 tokens | GPU | High memory bandwidth needed |
+| **Very Long** | > 2000 tokens | CPU | Large context handling |
+
+**Policy Modifiers:**
+- **PERFORMANCE**: Prefers GPU for medium/long prompts
+- **BATTERY_SAVER**: Prefers NPU for short, CPU for long
+- **BALANCED**: Uses AUTO heterogeneous mode
+
+**Example Scenario:**
+```
+User enters: "Hello" (5 tokens estimated)
+  → Routes to NPU (low latency)
+
+User enters: "Write a detailed essay..." (450 tokens estimated)
+  → Routes to GPU (high throughput)
+
+User enters: "Analyze this 10-page document..." (2500 tokens estimated)
+  → Routes to CPU (large memory)
+```
+
+**Token Estimation:**
+- Uses fast whitespace-based estimation (no tokenizer loading)
+- Adds 20% overhead for safety margin
+- Accurate enough for routing decisions without latency penalty
+
+**Combine with Benchmark:**
+```powershell
+# Context routing with live device metrics
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --benchmark --context-routing
+```
+
+### Advanced KV-Cache Management
+
+Optimize memory usage with **INT8 quantized KV-cache** for reduced RAM consumption during inference.
+
+**Enable Memory Optimization:**
+```powershell
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --optimize-memory
+```
+
+**Features:**
+
+#### 1. INT8 Quantization (Active)
+- **Reduces memory usage by 50-75%** compared to FP16/FP32 cache
+- **Device-specific optimizations:**
+  - **NPU**: Enables NPUW (NPU weight unification) for better cache efficiency
+  - **GPU**: Enables SDPA optimizations for attention computation
+  - **CPU**: Standard cache compression
+- **Minimal quality impact** - tested with various models
+- **Automatic configuration** - no manual tuning required
+
+#### 2. Memory Monitoring (Active)
+- **Real-time RAM tracking** via Windows PSAPI
+- **Initial check at startup** - displays memory status when enabled
+- **Continuous monitoring** - checks memory after each generation
+- **90% threshold warnings** - automatic alerts when memory is critical
+- **On-demand checks** - use `memory` command anytime to view current usage
+- **Per-device metrics** - monitors each backend independently
+- **Predictive estimation** - calculates expected cache size per token
+
+**Technical Details:**
+
+```cpp
+// Configured in OpenVINOBackend::load_model()
+config.KV_CACHE_PRECISION = "u8";  // INT8 quantization
+
+// Device-specific optimizations
+if (device == "NPU") {
+    config.NPU_USE_NPUW = true;     // Weight unification
+} else if (device.find("GPU") != std::string::npos) {
+    config.GPU_ENABLE_SDPA_OPTIMIZATION = true;  // SDPA for attention
+}
+```
+
+**Memory Savings Example:**
+```
+Model: Llama-3.1-8B-INT4
+Context: 2048 tokens
+Cache without INT8: ~512 MB
+Cache with INT8: ~128 MB
+Savings: 75% reduction
+```
+
+**Monitoring in Action:**
+```
+You [NPU]: Generate a long story...
+
+[Generation output...]
+[Time: 2.345 seconds]
+
+⚠️ [Memory Warning] RAM usage > 90% - Type 'memory' for details
+
+You [NPU]: memory
+
+[KVCache Monitor] Memory Status:
+  System RAM: 14720 / 16384 MB (89.8%)
+  ⚠️  WARNING: Memory usage above 90%!
+  ✅ INT8 KV-cache quantization is active (50-75% memory savings)
+```
+
+**Usage with Other Features:**
+```powershell
+# Full feature stack: server + routing + optimization
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct `
+  --server `
+  --port 8080 `
+  --context-routing `
+  --optimize-memory `
+  --benchmark
+
+# Speculative + memory optimization for long contexts
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct `
+  --speculative `
+  --draft-model ./models/Qwen2.5-0.5B-Instruct `
+  --optimize-memory `
+  --json 2> metrics.ndjson
+```
+
+**Notes:**
+- INT8 quantization is always enabled with `--optimize-memory`
+- Use the `memory` command during sessions to check current RAM/VRAM usage
+- Automatic warnings appear after each generation when RAM > 90%
+- Monitor memory usage via Task Manager → Performance → Memory/GPU
+- Works seamlessly with heterogeneous device execution
+- Provides 50-75% memory savings with negligible quality impact
+
+---
 
 #### Alternative: Manual Environment Setup
 
@@ -255,7 +617,7 @@ cd C:\Users\<YourUsername>\NPU_Project
 .\venv\Scripts\Activate.ps1
 
 # Load OpenVINO environment
-cmd /c "call C:\Users\<YourUsername>\Downloads\openvino_genai_windows_2025.4.0.0_x86_64\setupvars.bat"
+cmd /c "call C:\Users\<YourUsername>\Downloads\openvino_genai_windows_2026.0.0.0_x86_64\setupvars.bat"
 
 # Run the executable
 .\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct --policy PERFORMANCE
@@ -325,6 +687,35 @@ Next prompts stay on GPU until performance improves
 - Type `auto` to toggle automatic switching on/off
 - Type `switch [device]` to manually select a device
 - Prompt shows `AUTO` indicator when auto-switching is enabled: `You [GPU AUTO]:`
+
+### Interactive Commands
+
+While the program is running, you can use these commands:
+
+| Command | Description |
+|---------|-------------|
+| `help` | Display all available commands and flags |
+| `exit` | Quit the program |
+| `stats` | Show performance metrics (TTFT, TPOT, throughput) |
+| `memory` | Show current RAM/VRAM usage (available with `--optimize-memory`) |
+| `devices` | List all loaded devices and show which is active |
+| `switch <device>` | Switch to a different device (CPU/GPU/NPU) |
+| `auto` | Toggle automatic device switching on/off |
+
+**Example:**
+```
+You [NPU]: memory
+
+[KVCache Monitor] Memory Status:
+  System RAM: 8240 / 16384 MB (50.3%)
+
+You [NPU]: stats
+
+OpenVINO GenAI Performance Metrics:
+  - TTFT (Time to First Token): 124.531 ms
+  - TPOT (Time per Output Token): 13.902 ms
+  - Throughput: 71.942 tok/s
+```
 
 ### Expected Output
 
@@ -522,7 +913,7 @@ Only use this if build.ps1 fails:
 
 ```powershell
 # Load OpenVINO environment
-$OV = "C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_2025.4.0.0_x86_64"
+$OV = "C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_2026.0.0.0_x86_64"
 cmd /c "call `"$OV\setupvars.bat`" && cd /d C:\Users\ser13\NPU_Project && cmake --build build --config Release"
 ```
 
@@ -621,6 +1012,8 @@ The project is organized in layers:
 | **Token Streaming** | Outputs tokens in real-time as they're generated |
 | **Execution Benchmarking** | Shows timing for each generation: `[Time: X.XXX seconds]` |
 | **Perf Stats Command** | `stats` prints TTFT/TPOT/throughput from OpenVINO GenAI |
+| **Memory Monitor Command** | `memory` shows current RAM/VRAM usage with `--optimize-memory` flag |
+| **Automatic Memory Warnings** | Alerts when RAM > 90% after each generation (with `--optimize-memory`) |
 | **Automatic Logging** | Logs all activity to `runlog.txt` in project root (auto-deleted on success, kept on error) |
 
 ### Device Selection & Scheduling
@@ -816,7 +1209,7 @@ add_custom_command(TARGET npu_wrapper POST_BUILD
         $<TARGET_FILE:npu_wrapper>
         ${CMAKE_SOURCE_DIR}/dist/
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "C:/Users/ser13/Downloads/openvino_genai_windows_2025.4.0.0_x86_64/runtime/bin/intel64/Release"
+        "C:/Users/ser13/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/bin/intel64/Release"
         ${CMAKE_SOURCE_DIR}/dist/
     COMMAND ${CMAKE_COMMAND} -E copy
         "C:/Windows/System32/msvcp140.dll"
@@ -858,7 +1251,7 @@ Or if that doesn't work, run it step-by-step:
 .\venv\Scripts\Activate.ps1
 
 # Step 2: Load OpenVINO environment
-cmd /c "call C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_2025.4.0.0_x86_64\setupvars.bat"
+cmd /c "call C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_2026.0.0.0_x86_64\setupvars.bat"
 
 # Step 3: Run the executable
 .\dist\npu_wrapper.exe ./models/Qwen2.5-0.5B-Instruct
@@ -882,14 +1275,14 @@ cmd /c "call C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_2025.4.0.0_
 **Solution 1: Update build.ps1**
 Edit `build.ps1` line 8 with the correct path:
 ```powershell
-$OV = "C:\Users\<YourUsername>\Downloads\openvino_genai_windows_2025.4.0.0_x86_64"
+$OV = "C:\Users\<YourUsername>\Downloads\openvino_genai_windows_2026.0.0.0_x86_64"
 ```
 
 **Solution 2: Update CMakeLists.txt**
 Edit `CMakeLists.txt` lines 13-14:
 ```cmake
-set(OpenVINO_DIR "C:/Users/<YourUsername>/Downloads/openvino_genai_windows_2025.4.0.0_x86_64/runtime/cmake")
-set(OpenVINOGenAI_DIR "C:/Users/<YourUsername>/Downloads/openvino_genai_windows_2025.4.0.0_x86_64/runtime/cmake")
+set(OpenVINO_DIR "C:/Users/<YourUsername>/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/cmake")
+set(OpenVINOGenAI_DIR "C:/Users/<YourUsername>/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/cmake")
 ```
 
 **Important:** Use forward slashes `/` in CMakeLists.txt, not backslashes `\`
@@ -901,7 +1294,7 @@ set(OpenVINOGenAI_DIR "C:/Users/<YourUsername>/Downloads/openvino_genai_windows_
 **How to check:**
 ```powershell
 # Navigate to your OpenVINO folder
-cd C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_2025.4.0.0_x86_64
+cd C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_2026.0.0.0_x86_64
 
 # Check for these files/folders:
 ls setupvars.bat                    # Should exist at root
@@ -912,11 +1305,11 @@ ls runtime\cmake\                   # Should contain .cmake files
 **Solution:**
 1. Delete the existing OpenVINO folder
 2. Go to [OpenVINO GenAI GitHub Releases](https://github.com/openvinotoolkit/openvino.genai/releases)
-3. Download **Release 2025.4.0.0** - `openvino_genai_windows_2025.4.0.0_x86_64.zip`
+3. Download **Release 2026.0.0.0** - `openvino_genai_windows_2026.0.0.0_x86_64.zip`
 4. Extract to `C:\Users\<YourUsername>\Downloads\`
 5. Verify the folder structure matches above
 
-**Note:** Don't use curl/wget commands from documentation as they may point to wrong versions (e.g., 2024.6.0.0 instead of 2025.4.0.0).
+**Note:** Don't use curl/wget commands from documentation as they may point to wrong versions (e.g., 2024.6.0.0 instead of 2026.0.0.0).
 
 **Note:** Running `pip install openvino-genai` only installs Python bindings, not the C++ runtime needed for this project.
 
@@ -932,13 +1325,13 @@ ls runtime\cmake\                   # Should contain .cmake files
 # Look at the folder name:
 ls C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_*
 
-# Should show: openvino_genai_windows_2025.4.0.0_x86_64
+# Should show: openvino_genai_windows_2026.0.0.0_x86_64
 # NOT: openvino_genai_windows_2024.6.0.0_x86_64 or other versions
 ```
 
 **Solution:**
 1. Delete the wrong version folder
-2. Download the correct version from [GitHub Releases - 2025.4.0.0](https://github.com/openvinotoolkit/openvino.genai/releases/tag/2025.4.0.0)
+2. Download the correct version from [GitHub Releases - 2026.0.0.0](https://github.com/openvinotoolkit/openvino.genai/releases/tag/2026.0.0.0)
 3. Update paths in `CMakeLists.txt` and `build.ps1` if needed
 4. Run `.\build.ps1 -Clean`
 
@@ -994,7 +1387,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 |----------|---------|
 | Visual Studio Build Tools | 2022 (17.x) |
 | CMake | 3.28+ |
-| OpenVINO GenAI | 2025.4.0.0 |
+| OpenVINO GenAI | 2026.0.0.0 |
 | Python | 3.11+ |
 | C++ Standard | C++17 |
 

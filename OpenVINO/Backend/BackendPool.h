@@ -30,6 +30,9 @@ public:
 
     // Get current active device
     std::string get_active_device() const { return current_device; }
+    
+    // Get the active backend instance
+    IBackend* get_active_backend() { return get_backend(current_device); }
 
     // Print stats from current device
     void print_stats();

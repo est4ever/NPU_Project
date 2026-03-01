@@ -11,11 +11,11 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # Setup OpenVINO environment
 Write-Host "[Setup] Loading OpenVINO environment..." -ForegroundColor Cyan
-$ovPath = "$env:USERPROFILE\Downloads\openvino_genai_windows_2025.4.0.0_x86_64\setupvars.bat"
+$ovPath = "$env:USERPROFILE\Downloads\openvino_genai_windows_2026.0.0.0_x86_64\setupvars.bat"
 
 if (-not (Test-Path $ovPath)) {
     Write-Host "[Error] OpenVINO setupvars.bat not found at: $ovPath" -ForegroundColor Red
-    Write-Host "[Error] Make sure OpenVINO is installed at: $env:USERPROFILE\Downloads\openvino_genai_windows_2025.4.0.0_x86_64\" -ForegroundColor Red
+    Write-Host "[Error] Make sure OpenVINO is installed at: $env:USERPROFILE\Downloads\openvino_genai_windows_2026.0.0.0_x86_64\" -ForegroundColor Red
     exit 1
 }
 

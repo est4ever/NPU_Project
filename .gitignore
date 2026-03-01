@@ -22,6 +22,9 @@ __pycache__/
 # Models (too large for git)
 models/
 
+# NPU cache files
+npu_cache/
+
 # OS / editor
 .vs/
 .vscode/
