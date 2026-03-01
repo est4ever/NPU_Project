@@ -17,9 +17,28 @@ public:
         const std::string& model_path,
         const std::vector<std::string>& devices_to_test
     ) override;
+
+    std::map<std::string, double> benchmark_ttft_for_prompt(
+        const std::string& model_path,
+        const std::vector<std::string>& devices_to_test,
+        const std::string& prompt,
+        int max_new_tokens = 1
+    );
     
     std::string get_best_device_from_benchmarks(
         const std::map<std::string, DeviceBenchmark>& benchmarks,
         EnginePolicy policy
     ) override;
+
+    std::string get_device_for_context(
+        size_t estimated_tokens,
+        EnginePolicy policy
+    ) override;
+
+    SplitPrefillDevices get_split_prefill_devices(
+        const std::map<std::string, DeviceBenchmark>& benchmarks
+    ) override;
+
+    // Helper: Estimate token count from string (rough approximation)
+    static size_t estimate_token_count(const std::string& text);
 };

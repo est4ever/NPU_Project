@@ -39,4 +39,20 @@ public:
         const std::map<std::string, DeviceBenchmark>& benchmarks,
         EnginePolicy policy
     ) = 0;
+
+    // 5. Context-aware routing: choose device based on prompt length
+    virtual std::string get_device_for_context(
+        size_t estimated_tokens,
+        EnginePolicy policy
+    ) = 0;
+
+    // 6. Split-prefill routing: separate devices for prefill vs decode
+    struct SplitPrefillDevices {
+        std::string prefill_device;   // Best for TTFT (long prompts)
+        std::string decode_device;    // Best for throughput (generation)
+    };
+
+    virtual SplitPrefillDevices get_split_prefill_devices(
+        const std::map<std::string, DeviceBenchmark>& benchmarks
+    ) = 0;
 };

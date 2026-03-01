@@ -111,6 +111,45 @@ std::map<std::string, DeviceBenchmark> OpenVINOScheduler::benchmark_devices(
     return results;
 }
 
+std::map<std::string, double> OpenVINOScheduler::benchmark_ttft_for_prompt(
+    const std::string& model_path,
+    const std::vector<std::string>& devices_to_test,
+    const std::string& prompt,
+    int max_new_tokens
+) {
+    std::map<std::string, double> results;
+
+    std::cout << "[Scheduler] Measuring TTFT for prompt length " << prompt.size() << " chars...\n";
+
+    for (const auto& device : devices_to_test) {
+        std::cout << "[Scheduler] TTFT test on " << device << "... " << std::flush;
+        try {
+            ov::AnyMap pipeline_config;
+            if (device == "NPU") {
+                pipeline_config["CACHE_DIR"] = "./npu_cache";
+                pipeline_config["GENERATE_HINT"] = "BEST_PERF";
+            }
+
+            ov::genai::LLMPipeline pipe(model_path, device, pipeline_config);
+
+            ov::genai::GenerationConfig cfg;
+            cfg.max_new_tokens = max_new_tokens;
+            cfg.temperature = 0.0f;
+
+            auto result = pipe.generate(prompt, cfg);
+            auto perf = result.perf_metrics;
+            double ttft = perf.get_ttft().mean;
+            results[device] = ttft;
+            std::cout << "TTFT: " << ttft << " ms\n";
+        } catch (const std::exception& e) {
+            std::cout << "Failed: " << e.what() << "\n";
+            results[device] = 999999.0;
+        }
+    }
+
+    return results;
+}
+
 std::string OpenVINOScheduler::get_best_device_from_benchmarks(
     const std::map<std::string, DeviceBenchmark>& benchmarks,
     EnginePolicy policy
@@ -161,4 +200,68 @@ std::string OpenVINOScheduler::get_best_device_from_benchmarks(
     
     std::cout << "[Scheduler] Selected: " << best_device << " (score: " << best_score << ")\n";
     return best_device;
+}
+// Context-aware routing based on prompt length
+std::string OpenVINOScheduler::get_device_for_context(
+    size_t estimated_tokens,
+    EnginePolicy policy
+) {
+    // Thresholds for routing decisions
+    const size_t SHORT_PROMPT = 100;
+    const size_t MEDIUM_PROMPT = 500;
+    const size_t LONG_PROMPT = 2000;
+    
+    bool has_gpu = std::find(available_devices.begin(), available_devices.end(), "GPU") != available_devices.end();
+    bool has_npu = std::find(available_devices.begin(), available_devices.end(), "NPU") != available_devices.end();
+    
+    std::cout << "[Scheduler] Context-aware routing for ~" << estimated_tokens << " tokens...\n";
+    
+    if (estimated_tokens < SHORT_PROMPT) {
+        std::cout << "[Scheduler] Short context: routing to NPU/CPU for fast decode\n";
+        return has_npu ? "NPU" : "CPU";
+    } else if (estimated_tokens < MEDIUM_PROMPT) {
+        std::cout << "[Scheduler] Medium context: using standard policy\n";
+        return get_optimal_device(policy);
+    } else if (estimated_tokens < LONG_PROMPT) {
+        std::cout << "[Scheduler] Long context: routing to GPU for prefill\n";
+        return has_gpu ? "GPU" : "CPU";
+    } else {
+        std::cout << "[Scheduler] Very long context: forcing GPU for heavy prefill\n";
+        return has_gpu ? "GPU" : "CPU";
+    }
+}
+
+IScheduler::SplitPrefillDevices OpenVINOScheduler::get_split_prefill_devices(
+    const std::map<std::string, DeviceBenchmark>& benchmarks
+) {
+    SplitPrefillDevices result;
+    std::string best_prefill = "CPU";
+    double best_ttft = 999999.0;
+    std::string best_decode = "CPU";
+    double best_throughput = 0.0;
+    
+    for (const auto& [device, bench] : benchmarks) {
+        if (!bench.success) continue;
+        if (bench.ttft_ms < best_ttft) {
+            best_ttft = bench.ttft_ms;
+            best_prefill = device;
+        }
+        if (bench.tokens_per_sec > best_throughput) {
+            best_throughput = bench.tokens_per_sec;
+            best_decode = device;
+        }
+    }
+    
+    result.prefill_device = best_prefill;
+    result.decode_device = best_decode;
+    
+    std::cout << "[Scheduler] Split-prefill strategy:\n";
+    std::cout << "  - Prefill (TTFT): " << best_prefill << " (" << best_ttft << " ms)\n";
+    std::cout << "  - Decode (throughput): " << best_decode << " (" << best_throughput << " tok/s)\n";
+    
+    return result;
+}
+
+size_t OpenVINOScheduler::estimate_token_count(const std::string& text) {
+    return text.length() / 4;
 }

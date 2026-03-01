@@ -2,12 +2,15 @@
 # Usage: .\build.ps1            (normal rebuild)
 #        .\build.ps1 -Clean     (clean rebuild)
 # Optional:
-#   $env:OPENVINO_GENAI_DIR="C:\path\to\openvino_genai_windows_2025.4.0.0_x86_64"
+#   $env:OPENVINO_GENAI_DIR="C:\path\to\openvino_genai_windows_2026.0.0.0_x86_64"
 #   .\build.ps1
 
 param([switch]$Clean)
 
 $ErrorActionPreference = "Stop"
+
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+Push-Location $scriptDir
 
 function Find-OpenVINOSetupVars {
     # 1) User-provided env var (best)
@@ -18,7 +21,7 @@ function Find-OpenVINOSetupVars {
 
     # 2) Common default locations
     $candidates = @(
-        "$HOME\Downloads\openvino_genai_windows_2025.4.0.0_x86_64\setupvars.bat",
+        "$HOME\Downloads\openvino_genai_windows_2026.0.0.0_x86_64\setupvars.bat",
         "$HOME\Downloads\openvino_genai_windows_2025.4.1.0_x86_64\setupvars.bat"
     )
 
@@ -47,7 +50,7 @@ if ($setupvars) {
 } else {
     Write-Host "⚠️  OpenVINO setupvars.bat not found."
     Write-Host "    Set OPENVINO_GENAI_DIR to your extracted folder, e.g.:"
-    Write-Host "    `$env:OPENVINO_GENAI_DIR = `"C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_2025.4.0.0_x86_64`""
+    Write-Host "    `$env:OPENVINO_GENAI_DIR = `"C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_2026.0.0.0_x86_64`""
     Write-Host "    Then rerun: .\build.ps1"
     throw "OpenVINO not configured."
 }
@@ -56,6 +59,10 @@ if ($setupvars) {
 if ($Clean) {
     Write-Host "🧹 Cleaning build directory..."
     if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
+}
+
+if (-not (Test-Path "build")) {
+    New-Item -ItemType Directory -Path "build" | Out-Null
 }
 
 # --- Configure and build ---
@@ -73,3 +80,5 @@ Write-Host ""
 Write-Host "Run:"
 Write-Host "  cd $PWD\dist"
 Write-Host "  .\npu_wrapper.exe"
+
+Pop-Location
