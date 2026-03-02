@@ -1117,6 +1117,37 @@ int main(int argc, char** argv) {
                 }
             }
 
+            // SERVER MODE: Start REST API server instead of interactive loop
+            if (server_mode) {
+                std::cout << "\n[Server Mode] Starting OpenAI-compatible REST API server...\n";
+                std::cout << "[Server Mode] Backend: " << pool.get_active_device() << "\n";
+                if (context_routing) {
+                    std::cout << "[Server Mode] Context-aware routing: ENABLED\n";
+                }
+                if (enable_kv_paging) {
+                    std::cout << "[Server Mode] INT8 KV-cache optimization: ENABLED\n";
+                }
+                
+                RestAPIServer api_server(&pool, server_port);
+                
+                // Start server in a separate thread
+                std::thread server_thread([&api_server]() {
+                    api_server.start();
+                });
+                
+                std::cout << "\n[Server Mode] Server running. Press Ctrl+C to stop.\n";
+                std::cout << "[Server Mode] Test with: curl -X POST http://localhost:" << server_port << "/v1/chat/completions \\\n";
+                std::cout << "  -H \"Content-Type: application/json\" \\\n";
+                std::cout << "  -d '{\"model\":\"openvino\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello!\"}]}'\n\n";
+                
+                // Wait for server thread
+                server_thread.join();
+                
+                // Clean up and exit
+                logline("=== SERVER MODE END ===");
+                return 0;
+            }
+
             std::cout << "READY. Type prompt ('help' for commands, 'exit' to quit)\n" << std::flush;
             logline("READY.");
 

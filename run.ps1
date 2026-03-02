@@ -1,11 +1,6 @@
 # NPU Wrapper - Automated Setup and Run Script (PowerShell)
 # Usage: ./run.ps1 ./models/Qwen2.5-0.5B-Instruct --policy PERFORMANCE
 
-param(
-    [Parameter(ValueFromRemainingArguments=$true)]
-    [string[]]$Args
-)
-
 # Get the directory where this script is located
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
@@ -30,6 +25,6 @@ Write-Host "[Setup] Running npu_wrapper.exe..." -ForegroundColor Cyan
 Write-Host ""
 
 # Run the executable with all passed arguments
-& "$scriptDir\dist\npu_wrapper.exe" @Args
+& "$scriptDir\dist\npu_wrapper.exe" @args
 
 exit $LASTEXITCODE
