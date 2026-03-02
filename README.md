@@ -278,6 +278,13 @@ That's it! The `run.ps1` script automatically:
 # NDJSON metrics (one JSON line per generation, printed to stderr)
 .\run.ps1 ./models/Qwen2.5-0.5B-Instruct --json
 
+# REST API Server mode (OpenAI-compatible endpoints)
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --server
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --server --port 3000
+
+# Server with advanced features
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --server --optimize-memory --context-routing
+
 # Split prefill vs decode routing (long prompts -> best TTFT device)
 .\run.ps1 ./models/Qwen2.5-0.5B-Instruct --benchmark --split-prefill --prefill-threshold 256
 
@@ -410,19 +417,41 @@ Run the wrapper as an **HTTP server** with OpenAI-compatible endpoints for integ
 | GET | `/v1/models` | List available models |
 | GET | `/health` | Health check with active backend info |
 
-**Example Request:**
-```bash
-curl http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "openvino-local",
-    "messages": [
-      {"role": "system", "content": "You are a helpful assistant."},
-      {"role": "user", "content": "Explain quantum computing in simple terms"}
-    ],
-    "max_tokens": 150,
-    "temperature": 0.7
-  }'
+**Example Request (PowerShell - Recommended):**
+```powershell
+$body = @'
+{
+  "model": "openvino-local",
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "Explain quantum computing in simple terms"}
+  ],
+  "max_tokens": 150,
+  "temperature": 0.7
+}
+'@
+
+# Make the request and store the response
+$response = Invoke-RestMethod -Uri "http://localhost:8080/v1/chat/completions" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body $body
+
+# Extract the AI's response text
+$response.choices[0].message.content
+```
+
+**Quick one-liner for testing:**
+```powershell
+# For quick tests, access .choices[0].message.content directly
+(Invoke-RestMethod http://localhost:8080/v1/chat/completions -Method Post -ContentType "application/json" -Body '{"model":"openvino-local","messages":[{"role":"user","content":"Hello!"}],"max_tokens":50}').choices[0].message.content
+```
+
+**Alternative (real cURL in PowerShell):**
+```powershell
+curl.exe http://localhost:8080/v1/chat/completions `
+  -H "Content-Type: application/json" `
+  -d '{"model":"openvino-local","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Explain quantum computing in simple terms"}],"max_tokens":150,"temperature":0.7}'
 ```
 
 **Example Response:**
@@ -448,18 +477,29 @@ curl http://localhost:8080/v1/chat/completions \
 }
 ```
 
+**Accessing the response in PowerShell:**
+```powershell
+# The AI's message is nested in: .choices[0].message.content
+$response.choices[0].message.content
+
+# Output: "Quantum computing uses qubits that can exist in multiple states..."
+```
+> **Note:** If you call `Invoke-RestMethod` without storing the result, PowerShell will display `message=` as empty. Always store the response in a variable and access `.choices[0].message.content` to see the generated text.
+
 **Features:**
 - **OpenAI-compatible JSON format** - works with existing OpenAI client libraries
 - **CORS enabled** - allows browser-based applications
 - **Automatic error handling** - returns structured error responses
 - **Thread-safe** - handles concurrent requests via backend pool
 - **Dependencies auto-fetched** - uses CMake FetchContent for cpp-httplib and nlohmann/json
+- **Works standalone or with benchmark mode** - combine with `--benchmark` for runtime device switching
 
 **Notes:**
 - Server mode disables the interactive REPL
 - Uses the active backend selected by policy/device flags
-- Combine with `--benchmark` to enable runtime device switching
+- Port default is 8080, customize with `--port <number>`
 - Streaming support (SSE) is work-in-progress
+- Server runs in a background thread, use Ctrl+C to stop
 
 ### Context-Aware Device Routing
 
@@ -1354,6 +1394,89 @@ ls C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_*
 - Check device selection in output (should show `Device chosen: CPU`, `GPU`, or `NPU`)
 - If CPU, use smaller models: 0.6B or 1.5B instead of 7B+
 - Check system RAM and VRAM
+
+### Server mode: curl command fails in PowerShell
+
+**Symptoms:**
+- Running `curl http://localhost:8080/...` returns errors or unexpected output
+- Bash-style curl examples with `\` line continuations fail
+- `-H` and `-d` flags not recognized
+
+**Cause:** 
+In PowerShell, `curl` is an alias for `Invoke-WebRequest`, not the real cURL binary. It doesn't support:
+- Bash-style backslash `\` line continuation (PowerShell uses backtick `` ` ``)
+- cURL flags like `-H`, `-d` (PowerShell uses different parameter names)
+- Single quotes around JSON with double quotes inside
+
+**Solutions:**
+
+**Option 1: Use PowerShell native commands (Recommended)**
+```powershell
+$body = @'
+{
+  "model": "openvino-local",
+  "messages": [
+    {"role": "user", "content": "Hello!"}
+  ],
+  "max_tokens": 50
+}
+'@
+
+Invoke-RestMethod -Uri "http://localhost:8080/v1/chat/completions" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+**Option 2: Use real cURL**
+```powershell
+# Use curl.exe explicitly (not the alias)
+curl.exe http://localhost:8080/v1/chat/completions `
+  -H "Content-Type: application/json" `
+  -d '{"model":"openvino-local","messages":[{"role":"user","content":"Hello!"}],"max_tokens":50}'
+```
+
+**Key differences:**
+- PowerShell: Here-string `@'...'@`, backtick `` ` `` for line continuation
+- Bash: Backslash `\` for line continuation, single quotes preserve literals
+- Always use `curl.exe` in PowerShell if you need real cURL behavior
+
+### Server mode: API response shows empty content or `message=`
+
+**Symptoms:**
+When calling `Invoke-RestMethod` for `/v1/chat/completions`, you see:
+```
+choices : {@{finish_reason=stop; index=0; message=}}
+usage   : @{completion_tokens=0; prompt_tokens=0; total_tokens=0}
+```
+The `message=` appears empty and no actual AI response text is visible.
+
+**Cause:** 
+PowerShell's default object formatter truncates nested properties. The content IS there, but PowerShell doesn't display it when showing the raw object.
+
+**Solution:**
+Always store the response and explicitly access the nested content:
+
+```powershell
+# Store the response
+$response = Invoke-RestMethod -Uri "http://localhost:8080/v1/chat/completions" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body $body
+
+# Access the actual message content
+$response.choices[0].message.content
+```
+
+Or as a one-liner:
+```powershell
+(Invoke-RestMethod http://localhost:8080/v1/chat/completions -Method Post -ContentType "application/json" -Body $body).choices[0].message.content
+```
+
+**To see the full JSON response:**
+```powershell
+$response | ConvertTo-Json -Depth 5
+```
 
 ### venv activation fails
 
