@@ -68,9 +68,17 @@ if (-not (Test-Path "build")) {
 # --- Configure and build ---
 Write-Host "🔧 Configuring..."
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+if ($LASTEXITCODE -ne 0) {
+    Pop-Location
+    throw "CMake configure failed with exit code $LASTEXITCODE"
+}
 
 Write-Host "🔨 Building (Release)..."
 cmake --build build --config Release
+if ($LASTEXITCODE -ne 0) {
+    Pop-Location
+    throw "CMake build failed with exit code $LASTEXITCODE"
+}
 
 Write-Host ""
 Write-Host "✓ Build complete!"

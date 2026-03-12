@@ -4,13 +4,6 @@
 #include <memory>
 #include <vector>
 
-struct GeneratedOutput {
-    std::vector<int64_t> token_ids;
-    std::string text;
-    BackendMetrics metrics;
-    bool token_ids_valid = false;
-};
-
 class OpenVINOBackend : public IBackend {
 private:
     // We keep the LLMPipeline hidden inside this specific backend
@@ -36,5 +29,5 @@ public:
         int max_new_tokens,
         float temperature,
         bool stream_to_stdout
-    );
+    ) override;
 };

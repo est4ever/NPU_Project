@@ -10,6 +10,23 @@ enum class EnginePolicy {
     BALANCED       // Let the engine decide (AUTO)
 };
 
+// Helper functions for EnginePolicy
+inline std::string policy_to_string(EnginePolicy p) {
+    switch (p) {
+        case EnginePolicy::PERFORMANCE: return "PERFORMANCE";
+        case EnginePolicy::BATTERY_SAVER: return "BATTERY_SAVER";
+        case EnginePolicy::BALANCED: return "BALANCED";
+        default: return "UNKNOWN";
+    }
+}
+
+inline EnginePolicy string_to_policy(const std::string& str) {
+    if (str == "PERFORMANCE") return EnginePolicy::PERFORMANCE;
+    if (str == "BATTERY_SAVER") return EnginePolicy::BATTERY_SAVER;
+    if (str == "BALANCED") return EnginePolicy::BALANCED;
+    return EnginePolicy::BALANCED; // default
+}
+
 // Benchmark result for a single device
 struct DeviceBenchmark {
     std::string device_name;

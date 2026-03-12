@@ -273,12 +273,6 @@ static bool parse_string_arg(int argc, char** argv, const std::string& flag, std
     return true;
 }
 
-static std::string policy_to_string(EnginePolicy policy) {
-    if (policy == EnginePolicy::PERFORMANCE) return "PERFORMANCE";
-    if (policy == EnginePolicy::BATTERY_SAVER) return "BATTERY_SAVER";
-    return "BALANCED";
-}
-
 static int64_t estimate_prompt_tokens(const std::string& prompt) {
     int64_t count = 0;
     bool in_token = false;
@@ -883,17 +877,26 @@ int main(int argc, char** argv) {
                     std::cout << "[Server Mode] INT8 KV-cache optimization: ENABLED\n";
                 }
                 
-                RestAPIServer api_server(&pool, server_port);
+                RestAPIServer api_server(&pool, nullptr, &kv_monitor, server_port);
                 
-                // Start server in a separate thread
+                // Start server in a separate thread with exception handling
                 std::thread server_thread([&api_server]() {
-                    api_server.start();
+                    try {
+                        api_server.start();
+                    } catch (const std::exception& e) {
+                        std::cerr << "[Thread] Server thread exception: " << e.what() << "\n";
+                        std::cerr.flush();
+                    } catch (...) {
+                        std::cerr << "[Thread] Server thread unknown exception\n";
+                        std::cerr.flush();
+                    }
                 });
                 
                 std::cout << "\n[Server Mode] Server running. Press Ctrl+C to stop.\n";
                 std::cout << "[Server Mode] Test with: curl -X POST http://localhost:" << server_port << "/v1/chat/completions \\\n";
                 std::cout << "  -H \"Content-Type: application/json\" \\\n";
                 std::cout << "  -d '{\"model\":\"openvino\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello!\"}]}'\n\n";
+                std::cout.flush();
                 
                 // Wait for server thread
                 server_thread.join();
@@ -1128,17 +1131,26 @@ int main(int argc, char** argv) {
                     std::cout << "[Server Mode] INT8 KV-cache optimization: ENABLED\n";
                 }
                 
-                RestAPIServer api_server(&pool, server_port);
+                RestAPIServer api_server(&pool, nullptr, &kv_monitor, server_port);
                 
-                // Start server in a separate thread
+                // Start server in a separate thread with exception handling
                 std::thread server_thread([&api_server]() {
-                    api_server.start();
+                    try {
+                        api_server.start();
+                    } catch (const std::exception& e) {
+                        std::cerr << "[Thread] Server thread exception: " << e.what() << "\n";
+                        std::cerr.flush();
+                    } catch (...) {
+                        std::cerr << "[Thread] Server thread unknown exception\n";
+                        std::cerr.flush();
+                    }
                 });
                 
                 std::cout << "\n[Server Mode] Server running. Press Ctrl+C to stop.\n";
                 std::cout << "[Server Mode] Test with: curl -X POST http://localhost:" << server_port << "/v1/chat/completions \\\n";
                 std::cout << "  -H \"Content-Type: application/json\" \\\n";
                 std::cout << "  -d '{\"model\":\"openvino\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello!\"}]}'\n\n";
+                std::cout.flush();
                 
                 // Wait for server thread
                 server_thread.join();

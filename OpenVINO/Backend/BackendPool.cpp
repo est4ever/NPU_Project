@@ -1,8 +1,11 @@
 #include "BackendPool.h"
 #include <iostream>
+#include <stdexcept>
 
 void BackendPool::load_on_devices(const std::string& model_path_arg, const std::vector<std::string>& devices) {
     model_path = model_path_arg;
+    backends.clear();
+    current_device.clear();
     
     std::cout << "\n[BackendPool] Loading model on " << devices.size() << " device(s)...\n";
     
@@ -20,6 +23,10 @@ void BackendPool::load_on_devices(const std::string& model_path_arg, const std::
         }
     }
     
+    if (backends.empty()) {
+        throw std::runtime_error("[BackendPool] Failed to load model on all requested devices.");
+    }
+
     std::cout << "[BackendPool] Successfully loaded on " << backends.size() << " device(s)\n";
 }
 

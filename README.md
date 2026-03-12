@@ -498,8 +498,244 @@ $response.choices[0].message.content
 - Server mode disables the interactive REPL
 - Uses the active backend selected by policy/device flags
 - Port default is 8080, customize with `--port <number>`
-- Streaming support (SSE) is work-in-progress
-- Server runs in a background thread, use Ctrl+C to stop
+- Streaming endpoint now returns OpenAI-compatible SSE chunks (`role`, `content`, final stop chunk, `[DONE]`)
+- To stop the server: Press **Ctrl+C** in the terminal, or from PowerShell: `Stop-Process -Name "npu_wrapper" -Force`
+
+### Open-WebUI Integration (Windows + venv)
+
+If PowerShell shows `open-webui : The term 'open-webui' is not recognized...`, the virtual environment is not active in that terminal.
+
+**One-command launcher (recommended):**
+```powershell
+.\start_openwebui_stack.ps1
+```
+This script stops stale processes, starts both services, waits for readiness, and opens `http://localhost:8080`.
+
+**One-command refresh after code changes (build + deploy + restart):**
+```powershell
+.\refresh_stack.ps1
+```
+This script stops stale backend/UI processes, runs `build.ps1`, copies `build\Release\npu_wrapper.exe` to `dist\npu_wrapper.exe` with retry logic, then starts the stack.
+
+**Useful options:**
+```powershell
+# Skip build (just deploy/restart)
+.\refresh_stack.ps1 -SkipBuild
+
+# Force backend args while refreshing
+.\refresh_stack.ps1 -BackendArgs @("--device","NPU")
+```
+
+### Fixes Added (March 2026)
+
+This project now includes the following Open-WebUI and local API compatibility fixes:
+
+1. **Streaming compatibility for Open-WebUI**
+- `/v1/chat/completions` now returns valid OpenAI-style SSE events (`role`, `content`, `finish_reason`, `[DONE]`).
+
+2. **Message content compatibility**
+- Handles both string content and array-style content parts (for UI payload variations).
+
+3. **Backend abstraction fix**
+- REST server now calls generation through the `IBackend` interface (no fragile runtime cast requirement).
+
+4. **Fail-fast backend load behavior**
+- `BackendPool` now throws a clear startup error if all requested device loads fail, instead of failing later per request.
+
+5. **Startup script reliability updates**
+- Browser auto-open uses a more reliable Windows launcher path.
+- UI URL guidance explicitly uses `http://localhost:8080` (not `https`).
+- Added optional `-HideServiceWindows` switch.
+- Added `-BackendArgs` passthrough so Open-WebUI backend startup can match your known-good terminal flags.
+- `-BackendArgs` defaults to empty so stack startup matches normal `run.ps1` defaults unless explicitly overridden.
+
+6. **Open-WebUI chat is now pure chat (commands moved to terminal)**
+- Open-WebUI should be used for conversation only.
+- Runtime control commands are handled via terminal using `npu_cli.ps1`.
+- This keeps the `/v1/chat/completions` behavior OpenAI-compatible and avoids command/chat mixing.
+
+**Use terminal for control commands:**
+```powershell
+# Show current settings
+.\npu_cli.ps1 -Command status
+
+# Switch device
+.\npu_cli.ps1 -Command switch -Arguments "GPU"
+
+# Change policy
+.\npu_cli.ps1 -Command policy -Arguments "PERFORMANCE"
+
+# Toggle features
+.\npu_cli.ps1 -Command split-prefill -Arguments "on"
+.\npu_cli.ps1 -Command context-routing -Arguments "off"
+
+# Metrics
+.\npu_cli.ps1 -Command metrics -Arguments "last"
+```
+
+**CLI command list:**
+- `help`
+- `status`, `health`, `devices`, `stats`
+- `switch <CPU|GPU|NPU>`
+- `policy <PERFORMANCE|BATTERY_SAVER|BALANCED>`
+- `json on|off`
+- `split-prefill on|off`
+- `context-routing on|off`
+- `optimize-memory on|off`
+- `threshold <N>`
+- `metrics <last|summary|clear>`
+- `benchmark` and `calibrate` (terminal-mode guidance)
+
+**Model manager (new):**
+- `model list`
+- `model import <id> <path> [format]`
+- `model select <id>` (applies on next stack restart)
+- `model download <huggingface_repo> [id]`
+
+**Backend manager (new):**
+- `backend list`
+- `backend add <id> <type> <entrypoint>`
+- `backend select <id>` (applies on next stack restart)
+
+**Examples:**
+```powershell
+# Register and select a local model
+.\npu_cli.ps1 -Command model -Arguments "import","qwen-local","./models/Qwen2.5-0.5B-Instruct","openvino"
+.\npu_cli.ps1 -Command model -Arguments "select","qwen-local"
+
+# Download from Hugging Face into ./models and register automatically
+.\npu_cli.ps1 -Command model -Arguments "download","Qwen/Qwen2.5-0.5B-Instruct","qwen-hf"
+
+# Register and select an additional backend entry
+.\npu_cli.ps1 -Command backend -Arguments "add","onnxruntime","external","C:/tools/onnxruntime_runner.exe"
+.\npu_cli.ps1 -Command backend -Arguments "select","onnxruntime"
+```
+
+Registries are persisted in:
+- `registry/models_registry.json`
+- `registry/backends_registry.json`
+
+7. **Runtime terminal commands (no restart needed)**
+
+**Available in ALL startup modes (single-device, benchmark, and speculative):**
+
+**Core Commands:**
+- `help` - Show all available commands
+- `status` or `info` - Show current policy, device, and all settings
+- `exit` - Exit the program
+- `memory` - Show RAM/VRAM usage
+
+**Device Management Commands:**
+- `devices` - List all loaded devices
+- `switch <device>` - Change active device (e.g., `switch GPU`)
+- `policy <PERFORMANCE|BATTERY_SAVER|BALANCED>` - Change scheduling policy at runtime
+- `benchmark` - Run device benchmarks and load all devices (upgrades from single-device mode)
+
+**Feature Toggle Commands:**
+- `json on|off` - Toggle JSON metrics output
+- `split-prefill on|off` - Toggle split prefill/decode routing (requires multiple devices)
+- `context-routing on|off` - Toggle context-aware device routing
+- `optimize-memory on|off` - Toggle INT8 KV-cache compression (takes effect on next load)
+
+**Advanced Configuration:**
+- `threshold <N>` - Set prefill token threshold for split-prefill (e.g., `threshold 50`)
+- `calibrate` - Run TTFT tests across devices to find optimal threshold (requires multiple devices)
+- `stats` - Show OpenVINO performance metrics (TTFT, TPOT, throughput)
+
+**Example Runtime Workflow:**
+```
+You: status
+[Current Settings]
+Policy: BALANCED
+Active device: NPU
+JSON output: OFF
+Split-prefill: OFF
+...
+
+You: benchmark
+[Benchmark] Running device benchmarks...
+[Benchmark] Loading model on all tested devices...
+[Benchmark] Done. Active device: GPU
+
+You: split-prefill on
+[Split-prefill ENABLED]
+TTFT device: NPU
+Throughput device: GPU
+Threshold: 50 tokens
+
+You: calibrate
+[Calibrate] Running prefill threshold calibration...
+[Calibrate] 10 tokens: NPU=0.15s, GPU=0.22s
+[Calibrate] 25 tokens: NPU=0.18s, GPU=0.20s
+[Calibrate] 50 tokens: NPU=0.25s, GPU=0.18s
+[Calibrate] Recommended threshold: 25 tokens
+```
+
+**Notes:**
+- Commands work in both single-device and benchmark startup modes
+- Use `benchmark` command to transition from single-device → multi-device at runtime
+- Some features (split-prefill, calibrate) require multiple devices loaded
+- Policy changes affect future device selections; run `benchmark` to apply immediately
+
+**Important:** Rebuild after pulling/changing code so these fixes are included in `dist/npu_wrapper.exe`.
+
+```powershell
+Get-Process npu_wrapper -ErrorAction SilentlyContinue | Stop-Process -Force
+.\build.ps1
+```
+
+Then start stack:
+
+```powershell
+.\start_openwebui_stack.ps1
+```
+
+or force specific backend behavior:
+
+```powershell
+.\start_openwebui_stack.ps1 -BackendArgs @("--device","NPU")
+.\start_openwebui_stack.ps1 -BackendArgs @("--policy","PERFORMANCE")
+```
+
+**1) Start NPU REST server (Terminal A):**
+```powershell
+.\run.ps1 ./models/Qwen2.5-0.5B-Instruct --server --port 8000
+```
+
+**2) Start Open-WebUI with venv activated (Terminal B):**
+```powershell
+cd C:\Users\ser13\NPU_Project
+.\venv\Scripts\Activate.ps1
+open-webui serve --host 0.0.0.0 --port 8080
+```
+
+**3) Connect Open-WebUI to this project API:**
+- Open `http://localhost:8080` in your browser (or use VS Code **Simple Browser**)
+- Click the **⚙️ Settings icon** (usually bottom-left or top-right)
+- Navigate to **Admin Settings → Connections** (or just **Connections**)
+- Under **OpenAI API** section:
+  - Set **Base URL** to: `http://localhost:8000/v1`
+  - **API Key**: Enter any placeholder like `sk-dummy` (not validated)
+- Click **Save**
+- Return to chat and select **openvino-local** from the model dropdown
+- Type a message to test the generation pipeline (or test `help`, `devices`, `stats`)
+
+**4) Verify API before connecting UI (recommended):**
+```powershell
+Invoke-RestMethod http://localhost:8000/health
+Invoke-RestMethod http://localhost:8000/v1/models
+```
+
+**Restart checklist if connection fails:**
+1. Stop both terminals with **Ctrl+C**
+2. Confirm no old process is left:
+  ```powershell
+  Get-Process npu_wrapper -ErrorAction SilentlyContinue | Stop-Process -Force
+  Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force
+  ```
+3. Start Terminal A (NPU server) again
+4. Start Terminal B (activate venv, then `open-webui serve`) again
+5. Re-check `http://localhost:8000/health` before reconnecting in UI
 
 ### Context-Aware Device Routing
 
@@ -1501,6 +1737,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 | `.\venv\Scripts\Activate.ps1` | Activate Python virtual environment |
 | `pip install optimum[openvino]` | Install model conversion tools |
 | `optimum-cli export openvino --model <HF-ID> ./models/output` | Convert model to OpenVINO |
+| `Stop-Process -Name "npu_wrapper" -Force` | Stop running server/process (when Ctrl+C doesn't work) |
 
 ---
 
