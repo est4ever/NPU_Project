@@ -55,6 +55,9 @@ private:
     
     // POST /v1/cli/device/switch - Switch active device
     void handle_cli_device_switch(const class httplib::Request& req, class httplib::Response& res);
+
+    // POST /v1/cli/device/load - Hot-load the model on a new device
+    void handle_cli_device_load(const class httplib::Request& req, class httplib::Response& res);
     
     // POST /v1/cli/policy - Set scheduling policy
     void handle_cli_policy(const class httplib::Request& req, class httplib::Response& res);
@@ -67,6 +70,9 @@ private:
     
     // GET /v1/cli/metrics - Get metrics data
     void handle_cli_metrics(const class httplib::Request& req, class httplib::Response& res);
+
+    // GET /v1/cli/memory - Get live memory stats / optimization evidence
+    void handle_cli_memory(const class httplib::Request& req, class httplib::Response& res);
 
     // GET /v1/cli/model/list - List registered models and selected model
     void handle_cli_model_list(const class httplib::Request& req, class httplib::Response& res);

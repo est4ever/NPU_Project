@@ -876,8 +876,16 @@ int main(int argc, char** argv) {
                 if (enable_kv_paging) {
                     std::cout << "[Server Mode] INT8 KV-cache optimization: ENABLED\n";
                 }
-                
-                RestAPIServer api_server(&pool, nullptr, &kv_monitor, server_port);
+
+                RuntimeConfig server_config;
+                server_config.set_policy(policy);
+                server_config.set_json_mode(json_mode);
+                server_config.set_split_prefill(split_prefill);
+                server_config.set_context_routing(context_routing);
+                server_config.set_enable_kv_paging(enable_kv_paging);
+                server_config.set_prefill_threshold_high(prefill_threshold_high);
+
+                RestAPIServer api_server(&pool, &server_config, &kv_monitor, server_port);
                 
                 // Start server in a separate thread with exception handling
                 std::thread server_thread([&api_server]() {
@@ -1114,6 +1122,18 @@ int main(int argc, char** argv) {
                               << ", Throughput device: " << decode_device
                               << ", Threshold: " << prefill_threshold_high
                               << " (low: " << prefill_threshold_low << ") tokens\n";
+                } else if (server_mode) {
+                    // In server mode load all hardware devices so the UI can switch at runtime.
+                    // Policy determines initial active device; all discovered hardware is pre-loaded.
+                    std::vector<std::string> all_hw;
+                    for (const auto& d : scheduler.discover_devices()) {
+                        if (d == "CPU" || d == "GPU" || d == "NPU") all_hw.push_back(d);
+                    }
+                    if (all_hw.empty()) all_hw.push_back(device);
+                    pool.load_on_devices(model_dir, all_hw);
+                    pool.set_active_device(device);
+                    std::cout << "[Server Mode] Loaded " << pool.get_loaded_devices().size()
+                              << " device(s). Active: " << pool.get_active_device() << "\n" << std::flush;
                 } else {
                     pool.load_on_devices(model_dir, {device});
                     pool.set_active_device(device);
@@ -1130,8 +1150,18 @@ int main(int argc, char** argv) {
                 if (enable_kv_paging) {
                     std::cout << "[Server Mode] INT8 KV-cache optimization: ENABLED\n";
                 }
-                
-                RestAPIServer api_server(&pool, nullptr, &kv_monitor, server_port);
+
+                RuntimeConfig server_config;
+                server_config.set_policy(policy);
+                server_config.set_json_mode(json_mode);
+                server_config.set_split_prefill(split_prefill);
+                server_config.set_context_routing(context_routing);
+                server_config.set_enable_kv_paging(enable_kv_paging);
+                server_config.set_prefill_threshold_high(prefill_threshold_high);
+                server_config.prefill_device = prefill_device;
+                server_config.decode_device = decode_device;
+
+                RestAPIServer api_server(&pool, &server_config, &kv_monitor, server_port);
                 
                 // Start server in a separate thread with exception handling
                 std::thread server_thread([&api_server]() {

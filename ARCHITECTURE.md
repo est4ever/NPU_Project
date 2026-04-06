@@ -30,8 +30,8 @@
       │                                                       │
       │                                                       │
 ┌─────▼──────────────────────────────────────────────────────▼────┐
-│                         OpenWebUI                                 │
-│                     (Browser: localhost:8080)                     │
+│                         App Shell                                 │
+│                     (Browser: localhost:5173)                     │
 │                                                                   │
 │  Chat Input: "What is machine learning?"  ──────┐               │
 │                                                   │               │
@@ -48,7 +48,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                      OpenWebUI Chat                           │
+│                      Mixed Chat UI                           │
 │                                                               │
 │  User: "/status"          ─────────┐                         │
 │  User: "hello"                      │                         │
@@ -89,7 +89,7 @@
 .\npu_cli.ps1 -Command split-prefill -Arguments "on"
 ```
 
-### Chat (OpenWebUI)
+### Chat (App Shell)
 
 ```
 User: "Tell me about climate change"
@@ -123,6 +123,9 @@ Response: Standard OpenAI chat completion (no command interference)
 ### CLI Endpoints (Configuration)
 
 ```
+GET /v1/health
+Response: {"status": "healthy", "backend": "GPU"}
+
 GET /v1/cli/status
 Response: {"policy": "PERFORMANCE", "active_device": "GPU", ...}
 
@@ -144,6 +147,18 @@ Response: {"new_threshold": 100, ...}
 
 GET /v1/cli/metrics?mode=last
 Response: {...metrics data...}
+```
+
+Error responses are normalized across handlers:
+
+```json
+{
+   "error": {
+      "code": "string_code",
+      "message": "Human-readable message",
+      "details": {}
+   }
+}
 ```
 
 ## Implementation Details
@@ -178,7 +193,7 @@ Response: {...metrics data...}
 
 ## Migration Guide
 
-If you were using commands in the OpenWebUI chat:
+If you were using commands inside chat before:
 
 | Before | After |
 |--------|-------|
@@ -195,7 +210,7 @@ If you were using commands in the OpenWebUI chat:
 
 2. **Start the stack:**
    ```powershell
-   .\start_openwebui_stack.ps1
+   .\start_app.ps1
    ```
 
 3. **Use terminal for configuration:**
@@ -203,9 +218,9 @@ If you were using commands in the OpenWebUI chat:
    .\npu_cli.ps1 -Command status
    ```
 
-4. **Use OpenWebUI for chat:**
-   - Open browser: http://localhost:8080
-   - Start chatting (no commands!)
+4. **Use App Shell for chat/control:**
+   - UI: http://localhost:5173
+   - Start chatting (no slash-commands in chat)
 
 ## Testing the New System
 
@@ -215,7 +230,7 @@ If you were using commands in the OpenWebUI chat:
 # Terminal
 .\npu_cli.ps1 -Command status
 
-# Browser (http://localhost:8080)
+# Browser (http://localhost:5173)
 User: "What is AI?"
 # Should get model response, not error
 ```
@@ -231,6 +246,8 @@ User: "What is AI?"
 User: "Talk about machine learning"
 # Should use GPU now
 ```
+
+If only one device is loaded, `split-prefill on` is expected to fail with `insufficient_devices`.
 
 ### Test 3: No Commands in Chat
 

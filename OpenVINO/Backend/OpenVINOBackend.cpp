@@ -155,11 +155,8 @@ void OpenVINOBackend::load_model(const std::string& model_path, const std::strin
         
         std::cout << "[Backend] GPU optimizations: SDPA optimization, cache enabled\n";
     } else if (device == "CPU") {
-        // CPU uses different memory management
-        pipeline_config["CPU_THREADS_NUM"] = 0;  // Auto-detect optimal thread count
-        pipeline_config["CPU_BIND_THREAD"] = false;  // Don't bind to specific cores
-        
-        std::cout << "[Backend] CPU optimizations: auto-threading\n";
+        // Keep CPU config minimal for plugin compatibility across OpenVINO versions.
+        std::cout << "[Backend] CPU optimizations: default threading\n";
     }
     
     // Universal optimizations

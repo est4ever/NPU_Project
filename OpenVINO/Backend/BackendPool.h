@@ -19,6 +19,13 @@ public:
     // Load model on multiple devices
     void load_on_devices(const std::string& model_path, const std::vector<std::string>& devices);
 
+    // Hot-load the model onto a single new device without disturbing existing backends.
+    // Returns true on success, false if the device fails to load.
+    bool load_device(const std::string& device, std::string& error_out);
+
+    // Unload a device backend from the pool.
+    void unload_device(const std::string& device);
+
     // Get backend for a specific device
     IBackend* get_backend(const std::string& device);
 

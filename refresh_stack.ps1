@@ -1,7 +1,7 @@
 param(
     [string]$ModelPath = "./models/Qwen2.5-0.5B-Instruct",
     [int]$ApiPort = 8000,
-    [int]$WebUiPort = 8080,
+    [int]$AppPort = 5173,
     [int]$TimeoutSeconds = 90,
     [switch]$SkipBuild,
     [string[]]$BackendArgs = @()
@@ -16,7 +16,10 @@ Write-Host "[Refresh] Project root: $scriptDir" -ForegroundColor Cyan
 Write-Host "[Refresh] Stopping stale processes..." -ForegroundColor Yellow
 Get-Process npu_wrapper -ErrorAction SilentlyContinue | Stop-Process -Force
 Get-CimInstance Win32_Process -Filter "name = 'python.exe' OR name = 'pythonw.exe'" |
-    Where-Object { $_.CommandLine -like '*open-webui*' -or $_.CommandLine -like '*open_webui*' } |
+    Where-Object {
+        $_.CommandLine -like "*http.server $AppPort*" -and
+        $_.CommandLine -like "*--directory app_shell*"
+    } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 
 if (-not $SkipBuild) {
@@ -48,7 +51,7 @@ Write-Host "[Refresh] Starting stack..." -ForegroundColor Yellow
 $startArgs = @(
     "-ModelPath", $ModelPath,
     "-ApiPort", $ApiPort,
-    "-WebUiPort", $WebUiPort,
+    "-AppPort", $AppPort,
     "-TimeoutSeconds", $TimeoutSeconds
 )
 if ($BackendArgs.Count -gt 0) {
@@ -56,6 +59,6 @@ if ($BackendArgs.Count -gt 0) {
     $startArgs += $BackendArgs
 }
 
-& .\start_openwebui_stack.ps1 @startArgs
+& .\start_app.ps1 @startArgs
 
 Write-Host "[Refresh] Done. Stack restarted with latest build." -ForegroundColor Green

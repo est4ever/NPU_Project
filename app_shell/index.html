@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Loomis</title>
+  <link rel="stylesheet" href="./styles.css?v=20260323b" />
+</head>
+<body>
+  <header class="app-header glass">
+    <div>
+      <h1>Loomis <span class="greeting">— Hey, Loomis</span></h1>
+      <p class="subhead">Local AI control plane for OpenVINO runtime.</p>
+    </div>
+
+    <div class="header-tools">
+      <label class="base-url">
+        API Base
+        <input id="apiBase" type="text" value="http://localhost:8000/v1" />
+      </label>
+      <button id="openCommandPalette" type="button" class="ghost">Ctrl+K</button>
+      <div id="connBadge" class="conn-badge checking">API: checking</div>
+    </div>
+  </header>
+
+  <div class="readiness-bar" id="readinessBar">
+    <span class="readiness-label">Runtime</span>
+    <span class="readiness-chip" id="rDevice">device: -</span>
+    <span class="readiness-chip" id="rPolicy">policy: -</span>
+    <span class="readiness-chip" id="rModel">model: -</span>
+    <span class="readiness-chip" id="rBackend">backend: -</span>
+    <span class="readiness-chip" id="rDevices">loaded: -</span>
+    <span class="readiness-chip" id="rSplitPrefill">split-prefill: -</span>
+  </div>
+
+  <nav class="workspace-tabs" aria-label="Primary Views">
+    <button id="tabWorkspace" class="ghost active" type="button">Workspace</button>
+    <button id="tabControl" class="ghost" type="button">Control</button>
+  </nav>
+
+  <main class="layout-bento">
+    <section class="panel glass workspace-only" id="chatPanel">
+      <div class="panel-head">
+        <h2>Chat</h2>
+        <div class="tps-pill">TPS: <strong id="tpsValue">0.0</strong></div>
+      </div>
+
+      <div class="row">
+        <label>Model
+          <select id="chatModel">
+            <option value="openvino">openvino</option>
+          </select>
+        </label>
+        <label>Run On
+          <select id="chatDeviceTarget">
+            <option value="AUTO" selected>AUTO</option>
+            <option value="CPU">CPU</option>
+            <option value="GPU">GPU</option>
+            <option value="NPU">NPU</option>
+          </select>
+        </label>
+        <label>Temperature <input id="chatTemperature" type="number" min="0" max="2" step="0.1" value="0.7" /></label>
+        <label>Max Tokens <input id="chatMaxTokens" type="number" min="1" step="1" value="128" /></label>
+        <label><input id="chatStream" type="checkbox" checked /> Stream</label>
+      </div>
+
+      <div class="runtime-strip" id="runtimeStrip">
+        <span class="runtime-chip">Requested: <strong id="chatRequestedDevice">AUTO</strong></span>
+        <span class="runtime-chip">Active Runtime: <strong id="chatActiveDevice">-</strong></span>
+        <span class="runtime-chip">Last Inference Device: <strong id="chatLastDevice">-</strong></span>
+        <span class="runtime-chip">Last TPS: <strong id="chatLastTps">0.0</strong></span>
+      </div>
+      <p class="hint" id="chatDeviceAvailability">Loaded devices: -</p>
+
+      <div class="context-wrap">
+        <div class="context-top">
+          <strong>Context Window</strong>
+          <span id="contextLabel">0 / 2048 tokens</span>
+        </div>
+        <input id="contextWindow" type="range" min="0" max="8192" step="32" value="2048" />
+        <div class="row context-presets">
+          <button type="button" class="ghost context-preset" data-value="0">0</button>
+          <button type="button" class="ghost context-preset" data-value="1024">1K</button>
+          <button type="button" class="ghost context-preset" data-value="2048">2K</button>
+          <button type="button" class="ghost context-preset" data-value="4096">4K</button>
+          <button type="button" class="ghost context-preset" data-value="8192">8K</button>
+        </div>
+        <div class="progress-track">
+          <div id="contextFill" class="progress-fill"></div>
+        </div>
+        <p id="contextUsageHint" class="hint">Slider controls budget; usage updates from your prompt length.</p>
+      </div>
+
+      <textarea id="chatInput" rows="6" placeholder="Ask anything..."></textarea>
+
+      <div class="row">
+        <button id="sendChat">Send</button>
+        <button id="cancelChat" disabled>Cancel</button>
+        <button id="reconnectNow" class="ghost">Reconnect</button>
+        <button id="clearContext" class="ghost" title="Clear local session buffer">Clear Memory</button>
+        <button id="summarizeContext" class="ghost" title="Compress current output into reusable notes">Summarize Context</button>
+      </div>
+
+      <pre id="chatOutput" class="output"></pre>
+
+      <details>
+        <summary>Prompt History</summary>
+        <div class="history-head">
+          <span>Recent prompts</span>
+          <button id="clearHistory" type="button" class="ghost">Clear</button>
+        </div>
+        <ul id="promptHistory" class="history-list"></ul>
+      </details>
+    </section>
+
+    <section class="panel glass workspace-only" id="perfPanel">
+      <h2>Performance</h2>
+      <div class="perf-grid">
+        <div class="metric-card">
+          <div class="metric-label">Latency</div>
+          <div class="metric-value" id="npuLoadValue">-</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Inference Device</div>
+          <div class="metric-value" id="npuFreqValue">-</div>
+        </div>
+        <div class="metric-card span-2">
+          <div class="metric-label">Activity Wave</div>
+          <canvas id="npuSparkline" width="420" height="80"></canvas>
+        </div>
+      </div>
+
+      <div class="memory-wrap">
+        <div class="memory-head">
+          <strong>Memory Usage</strong>
+          <span id="memoryBarText">-</span>
+        </div>
+        <div class="memory-bar">
+          <div id="memoryBarFill" class="memory-fill"></div>
+        </div>
+      </div>
+
+      <div class="row">
+        <label>Metrics Mode
+          <select id="metricsMode">
+            <option>last</option>
+            <option>summary</option>
+            <option>clear</option>
+          </select>
+        </label>
+        <button id="fetchMetrics" class="ghost">Refresh Metrics</button>
+        <button id="fetchMemory" class="ghost">Refresh Memory</button>
+      </div>
+      <div id="metricsCards" class="status-cards"></div>
+      <details class="raw-toggle">
+        <summary>View Raw Metrics JSON</summary>
+        <pre id="metricsOutput" class="output compact-output"></pre>
+      </details>
+      <details class="raw-toggle">
+        <summary>View Raw Memory JSON</summary>
+        <pre id="memoryOutput" class="output compact-output"></pre>
+      </details>
+    </section>
+
+    <section class="panel glass control-only" id="statusPanel">
+      <div class="panel-head">
+        <h2>Status Cards</h2>
+        <button id="refreshStatus" class="ghost">Refresh</button>
+      </div>
+
+      <div id="statusCards" class="status-cards"></div>
+      <details class="raw-toggle">
+        <summary>View Raw Status JSON</summary>
+        <pre id="statusOutput" class="output compact-output"></pre>
+      </details>
+
+      <div class="row">
+        <label>Device
+          <select id="deviceSelect">
+            <option>CPU</option>
+            <option>GPU</option>
+            <option>NPU</option>
+            <option>AUTO</option>
+          </select>
+        </label>
+        <button id="switchDevice">Switch Device</button>
+
+        <label>Policy
+          <select id="policySelect">
+            <option>BALANCED</option>
+            <option>PERFORMANCE</option>
+            <option>BATTERY_SAVER</option>
+          </select>
+        </label>
+        <button id="setPolicy">Set Policy</button>
+      </div>
+
+      <div class="toggle-grid">
+        <label><input data-feature="json" class="feature-toggle" type="checkbox" /> json</label>
+        <label><input data-feature="split-prefill" class="feature-toggle" type="checkbox" /> split-prefill</label>
+        <label><input data-feature="context-routing" class="feature-toggle" type="checkbox" /> context-routing</label>
+        <label><input data-feature="optimize-memory" class="feature-toggle" type="checkbox" /> optimize-memory</label>
+      </div>
+
+      <div class="row">
+        <label>Threshold <input id="thresholdInput" type="number" min="1" step="1" value="80" /></label>
+        <button id="setThreshold" class="ghost">Set</button>
+        <button class="threshold-preset ghost" data-value="32" type="button">32</button>
+        <button class="threshold-preset ghost" data-value="64" type="button">64</button>
+        <button class="threshold-preset ghost" data-value="128" type="button">128</button>
+        <button class="threshold-preset ghost" data-value="256" type="button">256</button>
+      </div>
+      <p id="thresholdHint" class="hint"></p>
+      <details class="raw-toggle">
+        <summary>View Raw Feature/Policy JSON</summary>
+        <pre id="featuresOutput" class="output compact-output"></pre>
+        <pre id="devicePolicyOutput" class="output compact-output"></pre>
+      </details>
+    </section>
+
+    <section class="panel glass control-only" id="registryPanel">
+      <div class="panel-head">
+        <h2>Registry Explorer</h2>
+        <div class="row no-margin">
+          <button id="registryTabModels" class="ghost">Models</button>
+          <button id="registryTabBackends" class="ghost">Backends</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <input id="registrySearch" type="text" placeholder="Search id, format, type, status..." />
+        <button id="refreshModels" class="ghost">Refresh Models</button>
+        <button id="refreshBackends" class="ghost">Refresh Backends</button>
+      </div>
+
+      <div id="registryList" class="registry-list"></div>
+      <div id="registryDetail" class="registry-detail-card"></div>
+      <details class="raw-toggle">
+        <summary>View Raw Selected Entry JSON</summary>
+        <pre id="registryDetailRaw" class="output compact-output"></pre>
+      </details>
+
+      <details>
+        <summary>Registry Actions</summary>
+        <div class="row">
+          <select id="modelSelect"></select>
+          <button id="selectModel">Select Model</button>
+        </div>
+        <div class="row">
+          <input id="modelImportId" type="text" placeholder="model id" />
+          <input id="modelImportPath" type="text" placeholder="./models/YourModel" />
+          <input id="modelImportFormat" type="text" value="openvino" placeholder="format" />
+          <button id="importModel">Import Model</button>
+        </div>
+
+        <div class="row">
+          <select id="backendSelect"></select>
+          <button id="selectBackend">Select Backend</button>
+          <button id="openBackendWizard" class="ghost" type="button">Add Backend Wizard</button>
+        </div>
+
+        <div class="row">
+          <input id="backendAddId" type="text" placeholder="backend id" />
+          <input id="backendAddType" type="text" value="external" placeholder="type" />
+          <input id="backendAddEntrypoint" type="text" placeholder="C:/path/backend.exe" />
+          <button id="addBackend">Add Backend</button>
+        </div>
+
+        <details class="raw-toggle">
+          <summary>View Raw Model/Backend Details JSON</summary>
+          <pre id="modelDetails" class="output compact-output"></pre>
+          <pre id="backendDetails" class="output compact-output"></pre>
+        </details>
+      </details>
+
+      <details class="raw-toggle">
+        <summary>View Raw Registry Action JSON</summary>
+        <pre id="registryOutput" class="output compact-output"></pre>
+      </details>
+    </section>
+
+    <section class="panel glass workspace-only" id="activityPanel">
+      <h2>Agentic Activity</h2>
+      <ul id="activityFeed" class="activity-feed"></ul>
+    </section>
+
+    <section class="panel glass control-only" id="controlTerminalPanel">
+      <h2>Terminal Model Flow</h2>
+      <p class="hint">OpenClaw-style: download in terminal first, then activate from Registry Explorer.</p>
+
+      <ol class="flow-steps">
+        <li>Choose a preset model below, then click Build Command.</li>
+        <li>Run the command in terminal to download into your local models folder.</li>
+        <li>Open Registry Explorer and use Select Model and Select Backend.</li>
+      </ol>
+
+      <div class="preset-grid">
+        <button type="button" class="ghost model-preset" data-repo="Qwen/Qwen2.5-0.5B-Instruct" data-id="qwen-0.5b" data-format="openvino">Qwen 2.5 0.5B</button>
+        <button type="button" class="ghost model-preset" data-repo="meta-llama/Llama-3.1-8B-Instruct" data-id="llama-3.1-8b" data-format="openvino">Llama 3.1 8B</button>
+        <button type="button" class="ghost model-preset" data-repo="TinyLlama/TinyLlama-1.1B-Chat-v1.0" data-id="tinyllama-1.1b" data-format="openvino">TinyLlama 1.1B</button>
+      </div>
+
+      <div class="row">
+        <label>HF Repo <input id="terminalModelRepo" type="text" value="Qwen/Qwen2.5-0.5B-Instruct" /></label>
+        <label>Local ID <input id="terminalModelId" type="text" value="qwen-hf" /></label>
+      </div>
+
+      <div class="row">
+        <label>Default Backend
+          <select id="terminalBackendPreset">
+            <option value="openvino" selected>OpenVINO</option>
+            <option value="llamacpp">llama.cpp</option>
+            <option value="vllm">vLLM</option>
+          </select>
+        </label>
+        <button id="applyBackendPreset" type="button" class="ghost">Use Backend Preset</button>
+      </div>
+
+      <div class="row">
+        <button id="buildTerminalCommand" type="button" class="ghost">Build Command</button>
+        <button id="copyTerminalCommand" type="button" class="ghost">Copy Command</button>
+      </div>
+      <pre id="terminalCommandPreview" class="output compact-output">.\npu_cli.ps1 -Command model -Arguments "download","Qwen/Qwen2.5-0.5B-Instruct","qwen-hf"</pre>
+      <p class="hint">Tip: Presets only fill fields. Actual model files are downloaded by your terminal command.</p>
+    </section>
+  </main>
+
+  <dialog id="backendWizard" class="wizard">
+    <h3>Add New Backend</h3>
+    <p class="hint">Step 1: Enter identity. Step 2: Provide entrypoint. Step 3: Save.</p>
+    <div class="row">
+      <label>ID <input id="wizardBackendId" type="text" placeholder="backend id" /></label>
+      <label>Type <input id="wizardBackendType" type="text" value="external" /></label>
+    </div>
+    <label>Entrypoint
+      <input id="wizardBackendEntrypoint" type="text" placeholder="C:/path/backend.exe" />
+    </label>
+    <div class="row">
+      <button id="wizardSaveBackend" type="button">Save Backend</button>
+      <button id="wizardCancel" type="button" class="ghost">Cancel</button>
+    </div>
+  </dialog>
+
+  <dialog id="commandPalette" class="command-palette">
+    <h3>Search Commands</h3>
+    <input id="commandInput" type="text" placeholder="Search for commands..." />
+    <ul id="commandList"></ul>
+    <div class="row">
+      <button id="commandClose" type="button" class="ghost">Close</button>
+    </div>
+  </dialog>
+
+  <script src="./app.js?v=20260324b"></script>
+</body>
+</html>

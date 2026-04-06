@@ -10,6 +10,7 @@
 #include <fstream>
 #include <filesystem>
 #include <optional>
+#include <mutex>
 #include "../OpenVINO/Backend/KVCacheMonitor.h"
 
 using json = nlohmann::json;
@@ -24,6 +25,33 @@ namespace {
 const char* kRegistryDir = "./registry";
 const char* kModelsRegistryPath = "./registry/models_registry.json";
 const char* kBackendsRegistryPath = "./registry/backends_registry.json";
+std::mutex g_metrics_file_mutex;
+
+void set_json_response(httplib::Response& res, const json& body, int status = 200) {
+    res.status = status;
+    res.set_content(body.dump(), "application/json");
+}
+
+void set_error_response(
+    httplib::Response& res,
+    int status,
+    const std::string& code,
+    const std::string& message,
+    const json& details = nullptr
+) {
+    json error = {
+        {"error", {
+            {"code", code},
+            {"message", message}
+        }}
+    };
+
+    if (!details.is_null()) {
+        error["error"]["details"] = details;
+    }
+
+    set_json_response(res, error, status);
+}
 
 void ensure_registry_dir() {
     std::error_code ec;
@@ -424,6 +452,24 @@ size_t clear_metrics_files() {
     }
     return removed;
 }
+
+void append_metrics_record(const json& record) {
+    const std::vector<std::string> candidates = {
+        "./metrics.ndjson",
+        "../metrics.ndjson"
+    };
+
+    std::lock_guard<std::mutex> guard(g_metrics_file_mutex);
+    for (const auto& path : candidates) {
+        std::ofstream out(path, std::ios::app);
+        if (!out.is_open()) {
+            continue;
+        }
+        out << record.dump() << "\n";
+        out.flush();
+        return;
+    }
+}
 }
 
 RestAPIServer::RestAPIServer(BackendPool* pool, RuntimeConfig* config, KVCacheMonitor* kv_monitor, int port)
@@ -449,6 +495,10 @@ RestAPIServer::RestAPIServer(BackendPool* pool, RuntimeConfig* config, KVCacheMo
     server_->Get("/health", [this](const httplib::Request& req, httplib::Response& res) {
         handle_health(req, res);
     });
+
+    server_->Get("/v1/health", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_health(req, res);
+    });
     
     // ===== CLI Endpoints - For terminal control commands =====
     server_->Get("/v1/cli/status", [this](const httplib::Request& req, httplib::Response& res) {
@@ -457,6 +507,10 @@ RestAPIServer::RestAPIServer(BackendPool* pool, RuntimeConfig* config, KVCacheMo
     
     server_->Post("/v1/cli/device/switch", [this](const httplib::Request& req, httplib::Response& res) {
         handle_cli_device_switch(req, res);
+    });
+
+    server_->Post("/v1/cli/device/load", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_cli_device_load(req, res);
     });
     
     server_->Post("/v1/cli/policy", [this](const httplib::Request& req, httplib::Response& res) {
@@ -473,6 +527,10 @@ RestAPIServer::RestAPIServer(BackendPool* pool, RuntimeConfig* config, KVCacheMo
     
     server_->Get("/v1/cli/metrics", [this](const httplib::Request& req, httplib::Response& res) {
         handle_cli_metrics(req, res);
+    });
+
+    server_->Get("/v1/cli/memory", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_cli_memory(req, res);
     });
 
     server_->Get("/v1/cli/model/list", [this](const httplib::Request& req, httplib::Response& res) {
@@ -516,6 +574,7 @@ void RestAPIServer::start() {
     std::cout << "[RestAPI] Information Endpoints:\n";
     std::cout << "  - GET  http://localhost:" << port_ << "/v1/models\n";
     std::cout << "  - GET  http://localhost:" << port_ << "/health\n";
+    std::cout << "  - GET  http://localhost:" << port_ << "/v1/health\n";
     std::cout << "[RestAPI] CLI Control Endpoints (use npu_cli.ps1 tool):\n";
     std::cout << "  - GET  http://localhost:" << port_ << "/v1/cli/status\n";
     std::cout << "  - POST http://localhost:" << port_ << "/v1/cli/device/switch\n";
@@ -581,6 +640,8 @@ bool RestAPIServer::is_running() const {
 
 void RestAPIServer::handle_chat_completions(const httplib::Request& req, httplib::Response& res) {
     try {
+        auto started = std::chrono::high_resolution_clock::now();
+
         // Parse incoming JSON request
         json request_body = json::parse(req.body);
         
@@ -646,6 +707,7 @@ void RestAPIServer::handle_chat_completions(const httplib::Request& req, httplib
         std::string command_arg;
         std::string response_text;
         size_t completion_tokens = 0;
+        bool generated_output = false;
 
         // Keep chat pure: if a user types a control command in chat, guide them to terminal CLI.
         if (parse_command(last_user_message, command_name, command_arg)) {
@@ -665,6 +727,31 @@ void RestAPIServer::handle_chat_completions(const httplib::Request& req, httplib
             );
             response_text = output.text;
             completion_tokens = output.token_ids.size();
+            generated_output = true;
+        }
+
+        if (generated_output) {
+            auto ended = std::chrono::high_resolution_clock::now();
+            double total_ms = std::chrono::duration<double, std::milli>(ended - started).count();
+            const BackendMetrics metrics = backend_pool_->get_active_metrics();
+
+            json metrics_record = {
+                {"timestamp", std::chrono::system_clock::to_time_t(std::chrono::system_clock::now())},
+                {"mode", "server"},
+                {"device", backend_pool_->get_active_device()},
+                {"policy", policy_to_string(config_->get_policy())},
+                {"json_mode", config_->get_json_mode()},
+                {"split_prefill", config_->get_split_prefill()},
+                {"context_routing", config_->get_context_routing()},
+                {"optimize_memory", config_->get_enable_kv_paging()},
+                {"ttft_ms", metrics.ttft_ms},
+                {"tpot_ms", metrics.tpot_ms},
+                {"throughput_tok_s", metrics.throughput},
+                {"total_ms", total_ms},
+                {"completion_tokens", completion_tokens}
+            };
+
+            append_metrics_record(metrics_record);
         }
         
         if (stream) {
@@ -750,25 +837,21 @@ void RestAPIServer::handle_chat_completions(const httplib::Request& req, httplib
         }
         
     } catch (const json::exception& e) {
-        json error_response = {
-            {"error", {
-                {"message", "Invalid JSON: " + std::string(e.what())},
-                {"type", "invalid_request_error"},
-                {"code", "invalid_json"}
-            }}
-        };
-        res.status = 400;
-        res.set_content(error_response.dump(), "application/json");
+        set_error_response(
+            res,
+            400,
+            "invalid_json",
+            "Invalid JSON in request body",
+            json{{"exception", e.what()}}
+        );
     } catch (const std::exception& e) {
-        json error_response = {
-            {"error", {
-                {"message", std::string(e.what())},
-                {"type", "internal_error"},
-                {"code", "internal_error"}
-            }}
-        };
-        res.status = 500;
-        res.set_content(error_response.dump(), "application/json");
+        set_error_response(
+            res,
+            500,
+            "internal_error",
+            "Failed to generate chat completion",
+            json{{"exception", e.what()}}
+        );
     }
 }
 
@@ -788,7 +871,7 @@ void RestAPIServer::handle_list_models(const httplib::Request& req, httplib::Res
         })}
     };
     
-    res.set_content(response.dump(), "application/json");
+    set_json_response(res, response);
 }
 
 void RestAPIServer::handle_health(const httplib::Request& req, httplib::Response& res) {
@@ -797,7 +880,7 @@ void RestAPIServer::handle_health(const httplib::Request& req, httplib::Response
         {"backend", backend_pool_->get_active_device()}
     };
     
-    res.set_content(response.dump(), "application/json");
+    set_json_response(res, response);
 }
 
 // ===== CLI Endpoint Implementations =====
@@ -831,11 +914,15 @@ void RestAPIServer::handle_cli_status(const httplib::Request& req, httplib::Resp
             response["threshold"] = config_->get_prefill_threshold_high();
         }
         
-        res.set_content(response.dump(), "application/json");
+        set_json_response(res, response);
     } catch (const std::exception& e) {
-        json error = {{"error", e.what()}};
-        res.status = 500;
-        res.set_content(error.dump(), "application/json");
+        set_error_response(
+            res,
+            500,
+            "status_fetch_failed",
+            "Failed to fetch CLI status",
+            json{{"exception", e.what()}}
+        );
     }
 }
 
@@ -845,24 +932,72 @@ void RestAPIServer::handle_cli_device_switch(const httplib::Request& req, httpli
         std::string device = request_body.value("device", "");
         
         if (device.empty()) {
-            res.status = 400;
-            res.set_content(R"({"error": "device parameter required"})", "application/json");
+            set_error_response(res, 400, "missing_device", "device parameter required");
             return;
         }
         
         backend_pool_->set_active_device(device);
         std::string actual_device = backend_pool_->get_active_device();
-        
+
+        if (actual_device != device) {
+            set_error_response(res, 422, "device_not_loaded",
+                "Device " + device + " is not loaded in the current runtime");
+            return;
+        }
+
         json response = {
             {"new_active_device", actual_device},
-            {"success", actual_device == device}
+            {"success", true}
         };
-        
-        res.set_content(response.dump(), "application/json");
+
+        set_json_response(res, response);
     } catch (const std::exception& e) {
-        json error = {{"error", e.what()}};
-        res.status = 500;
-        res.set_content(error.dump(), "application/json");
+        set_error_response(
+            res,
+            500,
+            "device_switch_failed",
+            "Failed to switch device",
+            json{{"exception", e.what()}}
+        );
+    }
+}
+
+void RestAPIServer::handle_cli_device_load(const httplib::Request& req, httplib::Response& res) {
+    try {
+        json request_body = json::parse(req.body);
+        std::string device = request_body.value("device", "");
+
+        if (device.empty()) {
+            set_error_response(res, 400, "missing_device", "device parameter required");
+            return;
+        }
+
+        // Normalise to upper-case to match OpenVINO conventions.
+        std::transform(device.begin(), device.end(), device.begin(), ::toupper);
+
+        std::string load_error;
+        bool ok = backend_pool_->load_device(device, load_error);
+        if (!ok) {
+            set_error_response(res, 422, "device_load_failed",
+                "Failed to load model on device " + device + ": " + load_error);
+            return;
+        }
+
+        auto loaded = backend_pool_->get_loaded_devices();
+        json response = {
+            {"success", true},
+            {"loaded_device", device},
+            {"all_loaded_devices", loaded}
+        };
+        set_json_response(res, response);
+    } catch (const std::exception& e) {
+        set_error_response(
+            res,
+            500,
+            "device_load_error",
+            "Exception while loading device",
+            json{{"exception", e.what()}}
+        );
     }
 }
 
@@ -872,8 +1007,7 @@ void RestAPIServer::handle_cli_policy(const httplib::Request& req, httplib::Resp
         std::string policy_str = request_body.value("policy", "");
         
         if (policy_str.empty()) {
-            res.status = 400;
-            res.set_content(R"({"error": "policy parameter required"})", "application/json");
+            set_error_response(res, 400, "missing_policy", "policy parameter required");
             return;
         }
         
@@ -885,11 +1019,15 @@ void RestAPIServer::handle_cli_policy(const httplib::Request& req, httplib::Resp
             {"success", true}
         };
         
-        res.set_content(response.dump(), "application/json");
+        set_json_response(res, response);
     } catch (const std::exception& e) {
-        json error = {{"error", e.what()}};
-        res.status = 500;
-        res.set_content(error.dump(), "application/json");
+        set_error_response(
+            res,
+            500,
+            "policy_update_failed",
+            "Failed to update scheduling policy",
+            json{{"exception", e.what()}}
+        );
     }
 }
 
@@ -904,8 +1042,7 @@ void RestAPIServer::handle_cli_feature_toggle(const httplib::Request& req, httpl
         std::string feature = (last_slash != std::string::npos) ? path.substr(last_slash + 1) : "";
         
         if (feature.empty()) {
-            res.status = 400;
-            res.set_content(R"({"error": "feature not specified in path"})", "application/json");
+            set_error_response(res, 400, "missing_feature", "feature not specified in path");
             return;
         }
         
@@ -914,10 +1051,16 @@ void RestAPIServer::handle_cli_feature_toggle(const httplib::Request& req, httpl
         if (feature == "json") {
             config_->set_json_mode(enabled);
             response["status"] = enabled ? "enabled" : "disabled";
+            response["success"] = true;
         } else if (feature == "split-prefill") {
             if (enabled && backend_pool_->get_loaded_devices().size() < 2) {
-                response["error"] = "At least 2 devices required";
-                response["success"] = false;
+                set_error_response(
+                    res,
+                    409,
+                    "insufficient_devices",
+                    "At least 2 devices are required for split-prefill"
+                );
+                return;
             } else {
                 config_->set_split_prefill(enabled);
                 response["status"] = enabled ? "enabled" : "disabled";
@@ -929,20 +1072,26 @@ void RestAPIServer::handle_cli_feature_toggle(const httplib::Request& req, httpl
             response["success"] = true;
         } else if (feature == "optimize-memory") {
             config_->set_enable_kv_paging(enabled);
+            if (kv_monitor_) {
+                kv_monitor_->set_disk_paging_enabled(enabled, "./kv_cache_paging");
+            }
             response["status"] = enabled ? "enabled" : "disabled";
             response["success"] = true;
+            response["note"] = "Runtime flag updated. Full KV-cache optimization path is guaranteed when the stack is started with --optimize-memory.";
         } else {
-            res.status = 400;
-            json error = {{"error", "Unknown feature: " + feature}};
-            res.set_content(error.dump(), "application/json");
+            set_error_response(res, 400, "unknown_feature", "Unknown feature: " + feature);
             return;
         }
         
-        res.set_content(response.dump(), "application/json");
+        set_json_response(res, response);
     } catch (const std::exception& e) {
-        json error = {{"error", e.what()}};
-        res.status = 500;
-        res.set_content(error.dump(), "application/json");
+        set_error_response(
+            res,
+            500,
+            "feature_toggle_failed",
+            "Failed to update feature toggle",
+            json{{"exception", e.what()}}
+        );
     }
 }
 
@@ -952,8 +1101,7 @@ void RestAPIServer::handle_cli_threshold(const httplib::Request& req, httplib::R
         int threshold = request_body.value("threshold", 0);
         
         if (threshold <= 0) {
-            res.status = 400;
-            res.set_content(R"({"error": "threshold must be positive"})", "application/json");
+            set_error_response(res, 400, "invalid_threshold", "threshold must be positive");
             return;
         }
         
@@ -966,11 +1114,15 @@ void RestAPIServer::handle_cli_threshold(const httplib::Request& req, httplib::R
             {"success", true}
         };
         
-        res.set_content(response.dump(), "application/json");
+        set_json_response(res, response);
     } catch (const std::exception& e) {
-        json error = {{"error", e.what()}};
-        res.status = 500;
-        res.set_content(error.dump(), "application/json");
+        set_error_response(
+            res,
+            500,
+            "threshold_update_failed",
+            "Failed to update threshold",
+            json{{"exception", e.what()}}
+        );
     }
 }
 
@@ -986,16 +1138,25 @@ void RestAPIServer::handle_cli_metrics(const httplib::Request& req, httplib::Res
         if (mode == "last") {
             const auto record = read_latest_metrics_record();
             if (!record.has_value()) {
-                response = {{"error", "No metrics record found"}};
-                res.status = 404;
+                BackendMetrics live = backend_pool_->get_active_metrics();
+                response = {
+                    {"mode", "live_fallback"},
+                    {"device", backend_pool_->get_active_device()},
+                    {"policy", policy_to_string(config_->get_policy())},
+                    {"json_mode", config_->get_json_mode()},
+                    {"ttft_ms", live.ttft_ms},
+                    {"tpot_ms", live.tpot_ms},
+                    {"throughput_tok_s", live.throughput},
+                    {"note", "No persisted metrics record found yet; showing current backend metrics."}
+                };
             } else {
                 response = record.value();
             }
         } else if (mode == "summary") {
             const auto records = read_all_metrics_records();
             if (records.empty()) {
-                response = {{"error", "No metrics records found"}};
-                res.status = 404;
+                set_error_response(res, 404, "metrics_not_found", "No metrics records found");
+                return;
             } else {
                 double ttft_sum = 0.0, tpot_sum = 0.0, throughput_sum = 0.0;
                 int ttft_count = 0, tpot_count = 0, throughput_count = 0;
@@ -1029,15 +1190,73 @@ void RestAPIServer::handle_cli_metrics(const httplib::Request& req, httplib::Res
                 {"files_removed", removed}
             };
         } else {
-            res.status = 400;
-            response = {{"error", "Invalid mode. Use: last, summary, or clear"}};
+            set_error_response(
+                res,
+                400,
+                "invalid_mode",
+                "Invalid mode. Use: last, summary, or clear"
+            );
+            return;
         }
         
-        res.set_content(response.dump(), "application/json");
+        set_json_response(res, response);
     } catch (const std::exception& e) {
-        json error = {{"error", e.what()}};
-        res.status = 500;
-        res.set_content(error.dump(), "application/json");
+        set_error_response(
+            res,
+            500,
+            "metrics_query_failed",
+            "Failed to query metrics",
+            json{{"exception", e.what()}}
+        );
+    }
+}
+
+void RestAPIServer::handle_cli_memory(const httplib::Request& req, httplib::Response& res) {
+    try {
+        if (!kv_monitor_) {
+            set_error_response(
+                res,
+                503,
+                "memory_monitor_unavailable",
+                "KVCacheMonitor is not available in this runtime"
+            );
+            return;
+        }
+
+        const auto stats = kv_monitor_->get_memory_stats();
+        json response = {
+            {"optimize_memory", config_->get_enable_kv_paging() ? "ON" : "OFF"},
+            {"disk_paging_enabled", kv_monitor_->is_disk_paging_enabled()},
+            {"paging_directory", kv_monitor_->get_paging_directory()},
+            {"ram", {
+                {"total_mb", static_cast<int64_t>(stats.total_ram_mb)},
+                {"used_mb", static_cast<int64_t>(stats.used_ram_mb)},
+                {"available_mb", static_cast<int64_t>(stats.available_ram_mb)},
+                {"usage_percent", static_cast<double>(stats.usage_percent * 100.0f)}
+            }},
+            {"vram", {
+                {"total_mb", static_cast<int64_t>(stats.total_vram_mb)},
+                {"used_mb", static_cast<int64_t>(stats.used_vram_mb)},
+                {"available_mb", static_cast<int64_t>(stats.available_vram_mb)},
+                {"usage_percent", static_cast<double>(stats.vram_usage_percent * 100.0f)}
+            }}
+        };
+
+        if (config_->get_enable_kv_paging()) {
+            response["evidence"] = "INT8 KV-cache optimization is enabled; compare ram.used_mb / usage_percent before and after long prompts.";
+        } else {
+            response["evidence"] = "Optimization is OFF; enable optimize-memory to activate INT8 KV-cache path.";
+        }
+
+        set_json_response(res, response);
+    } catch (const std::exception& e) {
+        set_error_response(
+            res,
+            500,
+            "memory_query_failed",
+            "Failed to query memory status",
+            json{{"exception", e.what()}}
+        );
     }
 }
 
@@ -1045,10 +1264,15 @@ void RestAPIServer::handle_cli_model_list(const httplib::Request& req, httplib::
     try {
         json models_reg = load_models_registry();
         save_registry(kModelsRegistryPath, models_reg);
-        res.set_content(models_reg.dump(), "application/json");
+        set_json_response(res, models_reg);
     } catch (const std::exception& e) {
-        res.status = 500;
-        res.set_content(json({{"error", e.what()}}).dump(), "application/json");
+        set_error_response(
+            res,
+            500,
+            "model_list_failed",
+            "Failed to load models registry",
+            json{{"exception", e.what()}}
+        );
     }
 }
 
@@ -1062,8 +1286,13 @@ void RestAPIServer::handle_cli_model_import(const httplib::Request& req, httplib
         const std::string status = trim_copy(body.value("status", "ready"));
 
         if (id.empty() || path.empty()) {
-            res.status = 400;
-            res.set_content(R"({"error":"id and path are required"})", "application/json");
+            set_error_response(
+                res,
+                400,
+                "missing_required_fields",
+                "id and path are required",
+                json{{"required", json::array({"id", "path"})}}
+            );
             return;
         }
 
@@ -1095,15 +1324,28 @@ void RestAPIServer::handle_cli_model_import(const httplib::Request& req, httplib
         }
 
         save_registry(kModelsRegistryPath, models_reg);
-        res.set_content(json({
+        set_json_response(res, json({
             {"success", true},
             {"updated", updated},
             {"id", id},
             {"note", "Model registered. Restart stack to load a newly selected model."}
-        }).dump(), "application/json");
+        }));
+    } catch (const json::exception& e) {
+        set_error_response(
+            res,
+            400,
+            "invalid_json",
+            "Invalid JSON in request body",
+            json{{"exception", e.what()}}
+        );
     } catch (const std::exception& e) {
-        res.status = 500;
-        res.set_content(json({{"error", e.what()}}).dump(), "application/json");
+        set_error_response(
+            res,
+            500,
+            "model_import_failed",
+            "Failed to import model",
+            json{{"exception", e.what()}}
+        );
     }
 }
 
@@ -1112,28 +1354,39 @@ void RestAPIServer::handle_cli_model_select(const httplib::Request& req, httplib
         json body = json::parse(req.body);
         const std::string id = trim_copy(body.value("id", ""));
         if (id.empty()) {
-            res.status = 400;
-            res.set_content(R"({"error":"id is required"})", "application/json");
+            set_error_response(res, 400, "missing_id", "id is required");
             return;
         }
 
         json models_reg = load_models_registry();
         if (!has_registry_item(models_reg["models"], id)) {
-            res.status = 404;
-            res.set_content(json({{"error", "Model not found: " + id}}).dump(), "application/json");
+            set_error_response(res, 404, "model_not_found", "Model not found: " + id);
             return;
         }
 
         models_reg["selected_model"] = id;
         save_registry(kModelsRegistryPath, models_reg);
-        res.set_content(json({
+        set_json_response(res, json({
             {"success", true},
             {"selected_model", id},
             {"note", "Selection saved. Restart stack to apply model change."}
-        }).dump(), "application/json");
+        }));
+    } catch (const json::exception& e) {
+        set_error_response(
+            res,
+            400,
+            "invalid_json",
+            "Invalid JSON in request body",
+            json{{"exception", e.what()}}
+        );
     } catch (const std::exception& e) {
-        res.status = 500;
-        res.set_content(json({{"error", e.what()}}).dump(), "application/json");
+        set_error_response(
+            res,
+            500,
+            "model_select_failed",
+            "Failed to select model",
+            json{{"exception", e.what()}}
+        );
     }
 }
 
@@ -1141,10 +1394,15 @@ void RestAPIServer::handle_cli_backend_list(const httplib::Request& req, httplib
     try {
         json backends_reg = load_backends_registry();
         save_registry(kBackendsRegistryPath, backends_reg);
-        res.set_content(backends_reg.dump(), "application/json");
+        set_json_response(res, backends_reg);
     } catch (const std::exception& e) {
-        res.status = 500;
-        res.set_content(json({{"error", e.what()}}).dump(), "application/json");
+        set_error_response(
+            res,
+            500,
+            "backend_list_failed",
+            "Failed to load backends registry",
+            json{{"exception", e.what()}}
+        );
     }
 }
 
@@ -1159,8 +1417,13 @@ void RestAPIServer::handle_cli_backend_add(const httplib::Request& req, httplib:
             : json::array({"openvino"});
 
         if (id.empty() || entrypoint.empty()) {
-            res.status = 400;
-            res.set_content(R"({"error":"id and entrypoint are required"})", "application/json");
+            set_error_response(
+                res,
+                400,
+                "missing_required_fields",
+                "id and entrypoint are required",
+                json{{"required", json::array({"id", "entrypoint"})}}
+            );
             return;
         }
 
@@ -1187,14 +1450,27 @@ void RestAPIServer::handle_cli_backend_add(const httplib::Request& req, httplib:
         }
 
         save_registry(kBackendsRegistryPath, backends_reg);
-        res.set_content(json({
+        set_json_response(res, json({
             {"success", true},
             {"updated", updated},
             {"id", id}
-        }).dump(), "application/json");
+        }));
+    } catch (const json::exception& e) {
+        set_error_response(
+            res,
+            400,
+            "invalid_json",
+            "Invalid JSON in request body",
+            json{{"exception", e.what()}}
+        );
     } catch (const std::exception& e) {
-        res.status = 500;
-        res.set_content(json({{"error", e.what()}}).dump(), "application/json");
+        set_error_response(
+            res,
+            500,
+            "backend_add_failed",
+            "Failed to add backend",
+            json{{"exception", e.what()}}
+        );
     }
 }
 
@@ -1203,28 +1479,39 @@ void RestAPIServer::handle_cli_backend_select(const httplib::Request& req, httpl
         json body = json::parse(req.body);
         const std::string id = to_lower_copy(trim_copy(body.value("id", "")));
         if (id.empty()) {
-            res.status = 400;
-            res.set_content(R"({"error":"id is required"})", "application/json");
+            set_error_response(res, 400, "missing_id", "id is required");
             return;
         }
 
         json backends_reg = load_backends_registry();
         if (!has_registry_item(backends_reg["backends"], id)) {
-            res.status = 404;
-            res.set_content(json({{"error", "Backend not found: " + id}}).dump(), "application/json");
+            set_error_response(res, 404, "backend_not_found", "Backend not found: " + id);
             return;
         }
 
         backends_reg["selected_backend"] = id;
         save_registry(kBackendsRegistryPath, backends_reg);
-        res.set_content(json({
+        set_json_response(res, json({
             {"success", true},
             {"selected_backend", id},
             {"note", "Selection saved. Restart stack to apply backend change."}
-        }).dump(), "application/json");
+        }));
+    } catch (const json::exception& e) {
+        set_error_response(
+            res,
+            400,
+            "invalid_json",
+            "Invalid JSON in request body",
+            json{{"exception", e.what()}}
+        );
     } catch (const std::exception& e) {
-        res.status = 500;
-        res.set_content(json({{"error", e.what()}}).dump(), "application/json");
+        set_error_response(
+            res,
+            500,
+            "backend_select_failed",
+            "Failed to select backend",
+            json{{"exception", e.what()}}
+        );
     }
 }
 

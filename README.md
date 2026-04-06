@@ -10,6 +10,7 @@ A minimal C++ CLI wrapper that runs **OpenVINO GenAI LLMs** (OpenVINO-exported m
 - **Scheduler-based device selection** with three policies: BATTERY_SAVER (NPU-first), PERFORMANCE (GPU-first), BALANCED (AUTO heterogeneous)
 - **Multi-device execution mode** (`--benchmark`): Runs 2-second benchmarks on all devices, loads model on all of them, and allows runtime switching
 - **REST API Server** (`--server`): OpenAI-compatible HTTP endpoints for external integration
+- **Minimal App Shell** (`app_shell/`): Browser UI for chat + runtime controls (Day 10 ready)
 - **Context-aware routing** (`--context-routing`): Automatically selects best device based on prompt length
 - **Advanced KV-cache** (`--optimize-memory`): INT8 quantization for 50-75% memory savings
 - Auto-detects available hardware and applies policy-based routing
@@ -21,6 +22,73 @@ A minimal C++ CLI wrapper that runs **OpenVINO GenAI LLMs** (OpenVINO-exported m
 - `stats` command prints OpenVINO GenAI performance metrics (TTFT, TPOT, throughput)
 - Clean backend interface (`IBackend.h`) and scheduler interface (`IScheduler.h`) with OpenVINO implementations
 - Auto-cleanup: deletes log files on successful exit (keeps them on errors for debugging)
+
+### Minimal App Shell (Day 10)
+
+The repo includes a functional UI at `app_shell/` with 5 panels:
+- Chat
+- Device/Policy
+- Features/Threshold
+- Status/Metrics
+- Cutover Readiness
+
+Session UX included in the shell:
+- Prompt history (saved in browser local storage)
+- API connectivity badge with periodic health probing
+- Manual reconnect button and robust chat request cancellation
+- Instant feature toggles for `split-prefill`, `context-routing`, `optimize-memory`, and `json`
+- Registry UX for model/backend list/import/add/select with details panes
+- Built-in Day 10 cutover tracker (48h timer + checklist)
+
+For the cutover process and rollback rules, see `CUTOVER_READINESS.md`.
+
+Run it with any static file server, for example:
+
+```powershell
+python -m http.server 5173 --directory app_shell
+```
+
+Then open `http://localhost:5173`.
+Default API base is `http://localhost:8000/v1`.
+
+### One-Command Local Launch (App Shell)
+
+Use this script to start backend API and App Shell together:
+
+```powershell
+.\start_app.ps1
+```
+
+Common options:
+
+```powershell
+.\start_app.ps1 -ModelPath "./models/Qwen2.5-0.5B-Instruct" -ApiPort 8000 -AppPort 5173 -TimeoutSeconds 120
+```
+
+Default URLs:
+- App Shell (primary): `http://localhost:5173`
+- API base: `http://localhost:8000/v1`
+
+Notes:
+- `start_app.ps1` starts `run.ps1` for the backend, then starts a static server for `app_shell/`.
+- `split-prefill` requires at least 2 loaded devices; single-device runs will return `insufficient_devices` for that toggle.
+
+### Readiness And Daily Trial Automation
+
+Run preflight before a trial session:
+
+```powershell
+.\preflight_check.ps1
+```
+
+Run automated daily cutover checks (writes JSON report):
+
+```powershell
+.\cutover_daily_check.ps1
+```
+
+Default report folder:
+- `./runlogs/cutover/`
 
 ---
 
@@ -399,7 +467,7 @@ Run the wrapper as an **HTTP server** with OpenAI-compatible endpoints for integ
 
 **Quick Start:**
 ```powershell
-# Start server on default port 8080
+# Start server on default port 8000
 .\run.ps1 ./models/Qwen2.5-0.5B-Instruct --server
 
 # Custom port
@@ -432,7 +500,7 @@ $body = @'
 '@
 
 # Make the request and store the response
-$response = Invoke-RestMethod -Uri "http://localhost:8080/v1/chat/completions" `
+$response = Invoke-RestMethod -Uri "http://localhost:8000/v1/chat/completions" `
   -Method Post `
   -ContentType "application/json" `
   -Body $body
@@ -444,12 +512,12 @@ $response.choices[0].message.content
 **Quick one-liner for testing:**
 ```powershell
 # For quick tests, access .choices[0].message.content directly
-(Invoke-RestMethod http://localhost:8080/v1/chat/completions -Method Post -ContentType "application/json" -Body '{"model":"openvino-local","messages":[{"role":"user","content":"Hello!"}],"max_tokens":50}').choices[0].message.content
+(Invoke-RestMethod http://localhost:8000/v1/chat/completions -Method Post -ContentType "application/json" -Body '{"model":"openvino-local","messages":[{"role":"user","content":"Hello!"}],"max_tokens":50}').choices[0].message.content
 ```
 
 **Alternative (real cURL in PowerShell):**
 ```powershell
-curl.exe http://localhost:8080/v1/chat/completions `
+curl.exe http://localhost:8000/v1/chat/completions `
   -H "Content-Type: application/json" `
   -d '{"model":"openvino-local","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Explain quantum computing in simple terms"}],"max_tokens":150,"temperature":0.7}'
 ```
@@ -497,25 +565,23 @@ $response.choices[0].message.content
 **Notes:**
 - Server mode disables the interactive REPL
 - Uses the active backend selected by policy/device flags
-- Port default is 8080, customize with `--port <number>`
+- Port default is 8000, customize with `--port <number>`
 - Streaming endpoint now returns OpenAI-compatible SSE chunks (`role`, `content`, final stop chunk, `[DONE]`)
 - To stop the server: Press **Ctrl+C** in the terminal, or from PowerShell: `Stop-Process -Name "npu_wrapper" -Force`
 
-### Open-WebUI Integration (Windows + venv)
-
-If PowerShell shows `open-webui : The term 'open-webui' is not recognized...`, the virtual environment is not active in that terminal.
+### App Shell Integration (Windows)
 
 **One-command launcher (recommended):**
 ```powershell
-.\start_openwebui_stack.ps1
+.\start_app.ps1
 ```
-This script stops stale processes, starts both services, waits for readiness, and opens `http://localhost:8080`.
+This script stops stale processes, starts backend/API and app shell, waits for readiness, and opens `http://localhost:5173`.
 
 **One-command refresh after code changes (build + deploy + restart):**
 ```powershell
 .\refresh_stack.ps1
 ```
-This script stops stale backend/UI processes, runs `build.ps1`, copies `build\Release\npu_wrapper.exe` to `dist\npu_wrapper.exe` with retry logic, then starts the stack.
+This script stops stale backend/UI processes, runs `build.ps1`, copies `build\Release\npu_wrapper.exe` to `dist\npu_wrapper.exe` with retry logic, then starts app-shell-only stack.
 
 **Useful options:**
 ```powershell
@@ -526,33 +592,27 @@ This script stops stale backend/UI processes, runs `build.ps1`, copies `build\Re
 .\refresh_stack.ps1 -BackendArgs @("--device","NPU")
 ```
 
-### Fixes Added (March 2026)
+### Runtime/Stack Fixes Added (March 2026)
 
-This project now includes the following Open-WebUI and local API compatibility fixes:
+This project now includes the following app-shell and local API reliability fixes:
 
-1. **Streaming compatibility for Open-WebUI**
-- `/v1/chat/completions` now returns valid OpenAI-style SSE events (`role`, `content`, `finish_reason`, `[DONE]`).
+1. **Streaming compatibility improvements**
+- `/v1/chat/completions` returns valid OpenAI-style SSE events (`role`, `content`, `finish_reason`, `[DONE]`).
 
 2. **Message content compatibility**
 - Handles both string content and array-style content parts (for UI payload variations).
 
 3. **Backend abstraction fix**
-- REST server now calls generation through the `IBackend` interface (no fragile runtime cast requirement).
+- REST server calls generation through the `IBackend` interface (no fragile runtime cast requirement).
 
 4. **Fail-fast backend load behavior**
-- `BackendPool` now throws a clear startup error if all requested device loads fail, instead of failing later per request.
+- `BackendPool` throws a clear startup error if all requested device loads fail.
 
 5. **Startup script reliability updates**
-- Browser auto-open uses a more reliable Windows launcher path.
-- UI URL guidance explicitly uses `http://localhost:8080` (not `https`).
+- Browser auto-open uses a reliable Windows launcher path.
 - Added optional `-HideServiceWindows` switch.
-- Added `-BackendArgs` passthrough so Open-WebUI backend startup can match your known-good terminal flags.
+- Added `-BackendArgs` passthrough so startup can match known-good terminal flags.
 - `-BackendArgs` defaults to empty so stack startup matches normal `run.ps1` defaults unless explicitly overridden.
-
-6. **Open-WebUI chat is now pure chat (commands moved to terminal)**
-- Open-WebUI should be used for conversation only.
-- Runtime control commands are handled via terminal using `npu_cli.ps1`.
-- This keeps the `/v1/chat/completions` behavior OpenAI-compatible and avoids command/chat mixing.
 
 **Use terminal for control commands:**
 ```powershell
@@ -687,14 +747,14 @@ Get-Process npu_wrapper -ErrorAction SilentlyContinue | Stop-Process -Force
 Then start stack:
 
 ```powershell
-.\start_openwebui_stack.ps1
+.\start_app.ps1
 ```
 
 or force specific backend behavior:
 
 ```powershell
-.\start_openwebui_stack.ps1 -BackendArgs @("--device","NPU")
-.\start_openwebui_stack.ps1 -BackendArgs @("--policy","PERFORMANCE")
+.\start_app.ps1 -BackendArgs @("--device","NPU")
+.\start_app.ps1 -BackendArgs @("--policy","PERFORMANCE")
 ```
 
 **1) Start NPU REST server (Terminal A):**
@@ -702,23 +762,17 @@ or force specific backend behavior:
 .\run.ps1 ./models/Qwen2.5-0.5B-Instruct --server --port 8000
 ```
 
-**2) Start Open-WebUI with venv activated (Terminal B):**
+**2) Start App Shell static UI (Terminal B):**
 ```powershell
 cd C:\Users\ser13\NPU_Project
 .\venv\Scripts\Activate.ps1
-open-webui serve --host 0.0.0.0 --port 8080
+python -m http.server 5173 --directory app_shell
 ```
 
-**3) Connect Open-WebUI to this project API:**
-- Open `http://localhost:8080` in your browser (or use VS Code **Simple Browser**)
-- Click the **⚙️ Settings icon** (usually bottom-left or top-right)
-- Navigate to **Admin Settings → Connections** (or just **Connections**)
-- Under **OpenAI API** section:
-  - Set **Base URL** to: `http://localhost:8000/v1`
-  - **API Key**: Enter any placeholder like `sk-dummy` (not validated)
-- Click **Save**
-- Return to chat and select **openvino-local** from the model dropdown
-- Type a message to test the generation pipeline (or test `help`, `devices`, `stats`)
+**3) Connect App Shell to this project API:**
+- Open `http://localhost:5173` in your browser (or use VS Code **Simple Browser**)
+- Confirm API base is `http://localhost:8000/v1` in the app shell settings
+- Type a message to test the generation pipeline
 
 **4) Verify API before connecting UI (recommended):**
 ```powershell
@@ -734,7 +788,7 @@ Invoke-RestMethod http://localhost:8000/v1/models
   Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force
   ```
 3. Start Terminal A (NPU server) again
-4. Start Terminal B (activate venv, then `open-webui serve`) again
+4. Start Terminal B (activate venv, then `python -m http.server 5173 --directory app_shell`) again
 5. Re-check `http://localhost:8000/health` before reconnecting in UI
 
 ### Context-Aware Device Routing
@@ -1634,7 +1688,7 @@ ls C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_*
 ### Server mode: curl command fails in PowerShell
 
 **Symptoms:**
-- Running `curl http://localhost:8080/...` returns errors or unexpected output
+- Running `curl http://localhost:8000/...` returns errors or unexpected output
 - Bash-style curl examples with `\` line continuations fail
 - `-H` and `-d` flags not recognized
 
@@ -1658,7 +1712,7 @@ $body = @'
 }
 '@
 
-Invoke-RestMethod -Uri "http://localhost:8080/v1/chat/completions" `
+Invoke-RestMethod -Uri "http://localhost:8000/v1/chat/completions" `
   -Method Post `
   -ContentType "application/json" `
   -Body $body
@@ -1667,7 +1721,7 @@ Invoke-RestMethod -Uri "http://localhost:8080/v1/chat/completions" `
 **Option 2: Use real cURL**
 ```powershell
 # Use curl.exe explicitly (not the alias)
-curl.exe http://localhost:8080/v1/chat/completions `
+curl.exe http://localhost:8000/v1/chat/completions `
   -H "Content-Type: application/json" `
   -d '{"model":"openvino-local","messages":[{"role":"user","content":"Hello!"}],"max_tokens":50}'
 ```
@@ -1695,7 +1749,7 @@ Always store the response and explicitly access the nested content:
 
 ```powershell
 # Store the response
-$response = Invoke-RestMethod -Uri "http://localhost:8080/v1/chat/completions" `
+$response = Invoke-RestMethod -Uri "http://localhost:8000/v1/chat/completions" `
   -Method Post `
   -ContentType "application/json" `
   -Body $body
@@ -1706,7 +1760,7 @@ $response.choices[0].message.content
 
 Or as a one-liner:
 ```powershell
-(Invoke-RestMethod http://localhost:8080/v1/chat/completions -Method Post -ContentType "application/json" -Body $body).choices[0].message.content
+(Invoke-RestMethod http://localhost:8000/v1/chat/completions -Method Post -ContentType "application/json" -Body $body).choices[0].message.content
 ```
 
 **To see the full JSON response:**

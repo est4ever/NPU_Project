@@ -5,13 +5,33 @@
 The NPU CLI tool separates concerns: the **chat interface is now for conversations only**, and all **model configuration and control commands are handled through the terminal**.
 
 This provides:
-- **Pure chat experience** in OpenWebUI
+- **Pure chat experience** in App Shell
 - **Powerful terminal control** for model performance tuning
 - **Clear separation** between chat and configuration
 
 ## Setup
 
 The CLI tool is: `npu_cli.ps1`
+
+Recommended full local startup (backend + app shell):
+
+```powershell
+.\start_app.ps1
+```
+
+This launches:
+- App Shell (primary): `http://localhost:5173`
+- API base: `http://localhost:8000/v1`
+
+Recommended operations checks:
+
+```powershell
+# Validate model path, ports, health, status, and split-prefill readiness
+.\preflight_check.ps1
+
+# Run daily cutover checks and persist a report
+.\cutover_daily_check.ps1
+```
 
 ### Basic Usage
 
@@ -151,6 +171,8 @@ Toggle split prefill/decode routing by device (requires 2+ devices).
 .\npu_cli.ps1 -Command split-prefill -Arguments "off"
 ```
 
+If only one device is loaded, enabling this feature will fail with an `insufficient_devices` API error.
+
 #### `context-routing`
 Toggle context-aware device routing (intelligent device selection based on input).
 ```powershell
@@ -287,9 +309,9 @@ Minimize power consumption for edge/mobile deployment:
 
 ## Chat Interface (Pure Conversation)
 
-OpenWebUI is now purely for conversations. The following workflow applies:
+App Shell is now the conversation UI. The following workflow applies:
 
-1. **Start the stack:** `.\start_openwebui_stack.ps1`
+1. **Start the stack:** `.\start_app.ps1`
 2. **Configure model** via terminal: `.\npu_cli.ps1 -Command ...`
 3. **Chat in browser** (no commands, just conversation)
 4. **Adjust performance** back in terminal as needed
@@ -299,6 +321,7 @@ OpenWebUI is now purely for conversations. The following workflow applies:
 The CLI tool communicates with the backend via HTTP endpoints. If you want to integrate with other tools:
 
 ```
+GET  /v1/health                        - Health/status heartbeat
 GET  /v1/cli/status                    - Get all configuration
 POST /v1/cli/device/switch             - {"device": "GPU"}
 POST /v1/cli/policy                    - {"policy": "PERFORMANCE"}
@@ -313,10 +336,36 @@ POST /v1/cli/backend/add               - {"id":"onnxruntime","type":"external","
 POST /v1/cli/backend/select            - {"id":"onnxruntime"}
 ```
 
+All endpoint errors are normalized as:
+
+```json
+{
+	"error": {
+		"code": "string_code",
+		"message": "Human-readable message",
+		"details": {}
+	}
+}
+```
+
 ## Troubleshooting
 
+### Run API Smoke Tests
+
+Use the built-in smoke script to validate health, key CLI routes, and chat streaming behavior:
+
+```powershell
+.\smoke_api.ps1
+```
+
+Optional custom base URL:
+
+```powershell
+.\smoke_api.ps1 -ApiBase "http://localhost:8000"
+```
+
 ### "API call failed"
-- Ensure the backend server is running: `.\start_openwebui_stack.ps1`
+- Ensure the backend server is running: `.\start_app.ps1`
 - Check the server is listening on port 8000 (or configured port)
 - Verify firewall isn't blocking 127.0.0.1:8000
 
@@ -343,5 +392,5 @@ POST /v1/cli/backend/select            - {"id":"onnxruntime"}
 .\npu_cli.ps1 -Command backend -Arguments "list"
 
 # If you changed model/backend selection, restart stack to apply
-.\start_openwebui_stack.ps1
+.\start_app.ps1
 ```

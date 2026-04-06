@@ -80,13 +80,33 @@ if ($LASTEXITCODE -ne 0) {
     throw "CMake build failed with exit code $LASTEXITCODE"
 }
 
+# --- Stage dist/ (portable runtime bundle) ---
+$exeSrc    = Join-Path $scriptDir "build\Release\npu_wrapper.exe"
+$distDir   = Join-Path $scriptDir "dist"
+$ovinoBin  = "C:/Users/ser13/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/bin/intel64/Release"
+
+Write-Host "Staging dist/ ..."
+New-Item -ItemType Directory -Force -Path $distDir | Out-Null
+
+# Stop any running npu_wrapper so we can overwrite the exe
+Get-Process -Name "npu_wrapper" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 500
+
+Copy-Item -Force $exeSrc (Join-Path $distDir "npu_wrapper.exe")
+if (Test-Path $ovinoBin) {
+    Copy-Item -Recurse -Force (Join-Path $ovinoBin "*") $distDir
+} else {
+    Write-Warning "OpenVINO bin dir not found at $ovinoBin - skipping DLL copy"
+}
+foreach ($dll in @("msvcp140.dll", "vcruntime140.dll")) {
+    $src = "C:\Windows\System32\$dll"
+    if (Test-Path $src) { Copy-Item -Force $src (Join-Path $distDir $dll) }
+}
+
 Write-Host ""
-Write-Host "✓ Build complete!"
-Write-Host "📦 If you use dist/, copy the exe (only if your CMake doesn't already do it):"
-Write-Host "    copy build\Release\npu_wrapper.exe dist\npu_wrapper.exe"
-Write-Host ""
+Write-Host "Build complete!"
+Write-Host "  npu_wrapper.exe -> dist\npu_wrapper.exe"
 Write-Host "Run:"
-Write-Host "  cd $PWD\dist"
-Write-Host "  .\npu_wrapper.exe"
+Write-Host "  .\dist\npu_wrapper.exe"
 
 Pop-Location

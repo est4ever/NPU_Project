@@ -43,6 +43,52 @@ function Write-Info {
     Write-Host $Message -ForegroundColor Cyan
 }
 
+function Get-NpuApiErrorMessage {
+    param([Parameter(Mandatory = $true)]$Exception)
+
+    try {
+        $response = $Exception.Exception.Response
+        if ($null -eq $response) {
+            return "$Exception"
+        }
+
+        $stream = $response.GetResponseStream()
+        if ($null -eq $stream) {
+            return "$Exception"
+        }
+
+        $reader = New-Object System.IO.StreamReader($stream)
+        $body = $reader.ReadToEnd()
+        if ([string]::IsNullOrWhiteSpace($body)) {
+            return "$Exception"
+        }
+
+        try {
+            $parsed = $body | ConvertFrom-Json
+            if ($null -ne $parsed.error) {
+                if ($parsed.error -is [string]) {
+                    return $parsed.error
+                }
+
+                $message = $parsed.error.message
+                $code = $parsed.error.code
+                if (-not [string]::IsNullOrWhiteSpace($message)) {
+                    if (-not [string]::IsNullOrWhiteSpace($code)) {
+                        return "$message [$code]"
+                    }
+                    return $message
+                }
+            }
+        } catch {
+            # Fall through and return raw body when payload is not JSON.
+        }
+
+        return $body
+    } catch {
+        return "$Exception"
+    }
+}
+
 # Helper to make API calls
 function Invoke-NpuApiCommand {
     param(
@@ -72,7 +118,8 @@ function Invoke-NpuApiCommand {
         $response = Invoke-RestMethod @params
         return $response
     } catch {
-        throw "API call failed to $url : $_"
+        $errorMessage = Get-NpuApiErrorMessage -Exception $_
+        throw "API call failed to $url : $errorMessage"
     }
 }
 
@@ -327,7 +374,8 @@ function Show-NpuInfo {
     param([string]$Type = "status")
     
     try {
-        $response = Invoke-NpuApiCommand -Endpoint "/v1/cli/status"
+        $endpoint = if ($Type -eq "health") { "/v1/health" } else { "/v1/cli/status" }
+        $response = Invoke-NpuApiCommand -Endpoint $endpoint
         
         switch ($Type) {
             "status" {
@@ -361,8 +409,7 @@ function Show-NpuInfo {
             "health" {
                 Write-Info "=== Server Health ==="
                 Write-Host "Status: $($response.status)"
-                Write-Host "Active Backend: $($response.active_backend)"
-                Write-Host "Loaded Devices: $($response.loaded_devices_count)"
+                Write-Host "Backend: $($response.backend)"
                 Write-Success "Server is healthy"
             }
             "stats" {

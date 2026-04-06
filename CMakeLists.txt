@@ -46,23 +46,8 @@ add_executable(npu_wrapper
     OpenVINO/Scheduler/OpenVINOScheduler.cpp
 )
 
-add_custom_command(TARGET npu_wrapper POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_SOURCE_DIR}/dist/
-    COMMAND ${CMAKE_COMMAND} -E copy
-        $<TARGET_FILE:npu_wrapper>
-        ${CMAKE_SOURCE_DIR}/dist/
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "C:/Users/ser13/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/bin/intel64/Release"
-        ${CMAKE_SOURCE_DIR}/dist/
-    COMMAND ${CMAKE_COMMAND} -E copy
-        "C:/Windows/System32/msvcp140.dll"
-        ${CMAKE_SOURCE_DIR}/dist/
-    COMMAND ${CMAKE_COMMAND} -E copy
-        "C:/Windows/System32/vcruntime140.dll"
-        ${CMAKE_SOURCE_DIR}/dist/
-    COMMENT "Copying OpenVINO runtime libraries to dist/"
-)
+# Dist staging is handled by build.ps1 after a successful MSBuild,
+# using PowerShell Copy-Item (more reliable than cmake -E copy on Windows).
 
 target_link_libraries(npu_wrapper PRIVATE
     openvino::runtime
