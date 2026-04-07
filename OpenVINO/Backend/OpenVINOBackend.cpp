@@ -156,14 +156,14 @@ void OpenVINOBackend::load_model(const std::string& model_path, const std::strin
         std::cout << "[Backend] GPU optimizations: SDPA optimization, cache enabled\n";
     } else if (device == "CPU") {
         // Keep CPU config minimal for plugin compatibility across OpenVINO versions.
+        pipeline_config["NUM_STREAMS"] = 1;
         std::cout << "[Backend] CPU optimizations: default threading\n";
     }
     
     // Universal optimizations
     pipeline_config["PERFORMANCE_HINT"] = "LATENCY";  // Optimize for low latency
-    pipeline_config["NUM_STREAMS"] = 1;  // Single stream for predictable memory usage
     
-    std::cout << "[Backend] Global: INT8 KV-cache, latency-optimized, 1 stream\n";
+    std::cout << "[Backend] Global: INT8 KV-cache, latency-optimized\n";
 
     pipe = std::make_unique<ov::genai::LLMPipeline>(model_path, device, pipeline_config);
     std::cout << "[Backend] Model loaded successfully with advanced KV-cache config.\n";
@@ -250,6 +250,7 @@ GeneratedOutput OpenVINOBackend::generate_output(
     auto result = pipe->generate(prompt, cfg, streamer);
     output.text = buffer;
 
+    last_metrics = result.perf_metrics;   // keep get_last_metrics() current
     output.metrics.ttft_ms = result.perf_metrics.get_ttft().mean;
     output.metrics.tpot_ms = result.perf_metrics.get_tpot().mean;
     output.metrics.throughput = result.perf_metrics.get_throughput().mean;

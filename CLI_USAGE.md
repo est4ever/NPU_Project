@@ -5,13 +5,21 @@
 The NPU CLI tool separates concerns: the **chat interface is now for conversations only**, and all **model configuration and control commands are handled through the terminal**.
 
 This provides:
-- **Pure chat experience** in App Shell
-- **Powerful terminal control** for model performance tuning
-- **Clear separation** between chat and configuration
+- **Browser control plane** in App Shell
+- **Terminal chat and control** via `npu_cli.ps1`
+- **Clear separation** between runtime controls and conversation flow
 
 ## Setup
 
 The CLI tool is: `npu_cli.ps1`
+
+Portable first-run wizard:
+
+```powershell
+.\portable_setup.ps1
+```
+
+This prepares backend/model registry entries and launches the app shell.
 
 Recommended full local startup (backend + app shell):
 
@@ -45,8 +53,14 @@ Recommended operations checks:
 # Switch to a different device
 .\npu_cli.ps1 -Command switch -Arguments "GPU"
 
+# Preload a device explicitly before switching
+.\npu_cli.ps1 -Command load -Arguments "GPU"
+
 # Set performance policy
 .\npu_cli.ps1 -Command policy -Arguments "PERFORMANCE"
+
+# Chat from terminal
+.\npu_cli.ps1 -Command chat -Arguments "Hello, summarize current runtime status"
 
 # Enable split prefill feature
 .\npu_cli.ps1 -Command split-prefill -Arguments "on"
@@ -139,6 +153,15 @@ Change the active device for inference.
 .\npu_cli.ps1 -Command switch -Arguments "NPU"
 ```
 
+#### `load`
+Preload model backend on a device without switching active device.
+```powershell
+.\npu_cli.ps1 -Command load -Arguments "GPU"
+.\npu_cli.ps1 -Command load -Arguments "NPU"
+```
+
+Use this first when debugging accelerator failures.
+
 #### `policy`
 Set the scheduling/power policy for the backend.
 ```powershell
@@ -150,6 +173,18 @@ Set the scheduling/power policy for the backend.
 
 # Balanced (default)
 .\npu_cli.ps1 -Command policy -Arguments "BALANCED"
+```
+
+### Terminal Chat
+
+#### `chat`
+Run chat from terminal while keeping App Shell for controls.
+```powershell
+# One-shot prompt
+.\npu_cli.ps1 -Command chat -Arguments "Write a short deployment checklist"
+
+# Interactive chat loop (type exit to quit)
+.\npu_cli.ps1 -Command chat
 ```
 
 ### Feature Toggles
@@ -236,6 +271,7 @@ You want maximum performance for a real-time application:
 .\npu_cli.ps1 -Command status
 
 # Switch to GPU if available
+.\npu_cli.ps1 -Command load -Arguments "GPU"
 .\npu_cli.ps1 -Command switch -Arguments "GPU"
 
 # Set performance policy
@@ -244,6 +280,10 @@ You want maximum performance for a real-time application:
 # Check performance improved
 .\npu_cli.ps1 -Command stats
 ```
+
+If `load GPU` fails:
+- Confirm Intel GPU driver/runtime are installed.
+- Run `status` and keep working on CPU/NPU fallback.
 
 ### Example 2: Low-Latency Inference with Split Routing
 

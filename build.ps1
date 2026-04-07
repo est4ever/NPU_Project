@@ -46,7 +46,12 @@ $setupvars = Find-OpenVINOSetupVars
 if ($setupvars) {
     Write-Host "Setting up OpenVINO environment:"
     Write-Host "  $setupvars"
-    cmd /c "`"$setupvars`" > nul 2>&1"
+    # Import variables from setupvars.bat into this PowerShell process.
+    cmd /c "call `"$setupvars`" > nul 2>&1 && set" | ForEach-Object {
+        if ($_ -match '^([^=]+)=(.*)$') {
+            [Environment]::SetEnvironmentVariable($matches[1], $matches[2], [EnvironmentVariableTarget]::Process)
+        }
+    }
 } else {
     Write-Host "⚠️  OpenVINO setupvars.bat not found."
     Write-Host "    Set OPENVINO_GENAI_DIR to your extracted folder, e.g.:"
@@ -83,7 +88,8 @@ if ($LASTEXITCODE -ne 0) {
 # --- Stage dist/ (portable runtime bundle) ---
 $exeSrc    = Join-Path $scriptDir "build\Release\npu_wrapper.exe"
 $distDir   = Join-Path $scriptDir "dist"
-$ovinoBin  = "C:/Users/ser13/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/bin/intel64/Release"
+$openvinoRoot = Split-Path -Parent $setupvars
+$ovinoBin  = Join-Path $openvinoRoot "runtime\bin\intel64\Release"
 
 Write-Host "Staging dist/ ..."
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null

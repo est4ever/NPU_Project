@@ -1,136 +1,92 @@
-# Publishing NPU Companion — Step-by-Step Guide
+# Publishing NPU Companion (Browser + Terminal)
 
-## What Exists Already
+This project is now distributed as a local browser control panel plus terminal chat workflow.
 
-| Artifact | Location | Status |
-|---|---|---|
-| Tauri config | `src-tauri/tauri.conf.json` | Done |
-| App icons (all sizes) | `src-tauri/icons/` | Done |
-| Build script | `tauri_build.ps1` | Done |
-| C++ backend | `build/Release/npu_wrapper.exe` | Built via `build.ps1` |
-| App shell UI | `app_shell/` | Done |
-| Cargo project | `src-tauri/Cargo.toml` v0.1.0 | Done |
+## Runtime Model
 
----
+- Browser control panel: `app_shell/`
+- Backend API: `dist/npu_wrapper.exe` (started by scripts)
+- Terminal chat/control: `npu_cli.ps1`
 
-## Step 1: Prerequisites
+No desktop wrapper is required.
 
-Install these once per machine:
+## Step 1: Prerequisites (per machine)
 
-### A. Rust toolchain
-```powershell
-# Install from https://rustup.rs — then verify:
-cargo --version
-```
+1. OpenVINO GenAI archive installed (contains `setupvars.bat`).
+2. Visual Studio Build Tools 2022 + CMake (for building from source).
+3. Python available (for serving `app_shell/`).
 
-### B. Tauri CLI
-```powershell
-cargo install tauri-cli --version "^2"
-# Verify:
-cargo tauri --version
-```
+Optional but recommended:
+- `huggingface-cli` for model downloads.
 
-### C. WebView2 (Windows target)
-- WebView2 is pre-installed on Windows 10/11 (version 1903+).
-- If building for clean VMs, download installer from: https://developer.microsoft.com/en-us/microsoft-edge/webview2/
+## Step 2: First-Run Setup Wizard
 
-### D. Build the C++ backend first
-```powershell
-.\build.ps1
-# Confirms presence of: build\Release\npu_wrapper.exe
-```
-
----
-
-## Step 2: Build the Desktop Installer
+Run:
 
 ```powershell
-.\tauri_build.ps1
+.\portable_setup.ps1
 ```
 
-This script:
-1. Checks cargo, tauri-cli, and npu_wrapper.exe are present.
-2. Copies `npu_wrapper.exe` next to the Tauri output.
-3. Runs `cargo tauri build` to produce installers.
+Wizard actions:
 
-Output location:
-```
-src-tauri\target\release\bundle\
-├── msi\    ← Windows MSI installer (for enterprise/AD deployment)
-└── nsis\   ← NSIS installer (for direct/consumer distribution)
-```
+1. Optional build step (`build.ps1`).
+2. Choose backend (default OpenVINO or custom entrypoint).
+3. Choose model source:
+	- local model path, or
+	- download from Hugging Face.
+4. Writes:
+	- `registry/models_registry.json`
+	- `registry/backends_registry.json`
+5. Optionally launches stack.
 
----
+## Step 3: Daily Run Commands
 
-## Step 3: What the Packaged App Includes
-
-- `NPU Companion.exe` — Tauri desktop shell wrapping the app_shell UI.
-- `npu_wrapper.exe` — The C++ OpenVINO backend (copied by build script).
-- WebView2 runtime — embedded via installer.
-
-**Not bundled (users must have locally):**
-- OpenVINO runtime DLLs (from `setupvars.bat`). Documented in README.
-- Model files in `./models/`.
-
----
-
-## Step 4: Test the Installer Locally
+Launch backend + browser panel:
 
 ```powershell
-# Install from NSIS output:
-.\src-tauri\target\release\bundle\nsis\NPU Companion_0.1.0_x64-setup.exe
-
-# Launch the installed app, verify:
-# 1. App shell loads (no browser required).
-# 2. Tauri badge appears in header ("Tauri desktop").
-# 3. API connectivity badge shows after starting backend separately.
+.\start_app.ps1
 ```
 
----
+Then chat in terminal:
 
-## Step 5: Pre-Publish Checklist
+```powershell
+.\npu_cli.ps1 -Command chat
+```
 
-Before shipping to others:
+One-shot chat:
 
-- [ ] All preflight checks pass: `.\preflight_check.ps1`
-- [ ] All daily cutover checks pass: `.\cutover_daily_check.ps1`
-- [ ] 48h trial window completed (see `CUTOVER_READINESS.md`)
-- [ ] Tested installer on a clean profile (no dev tools)
-- [ ] `version` in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json` match
-- [ ] README has correct OpenVINO version and download link
-- [ ] Known limitations documented below
+```powershell
+.\npu_cli.ps1 -Command chat -Arguments "hello"
+```
 
----
+## Step 4: Validation Checklist
 
-## Step 6: Distribution Options
+1. API health:
 
-### Option A: Direct file share (internal pilot)
-Share the `.exe` or `.msi` from `src-tauri\target\release\bundle\`.
+```powershell
+Invoke-RestMethod http://localhost:8000/health
+```
 
-### Option B: GitHub Releases
-1. Tag the release: `git tag v0.1.0`
-2. Push: `git push origin v0.1.0`
-3. Create GitHub Release and attach the bundles from `bundle\msi\` and `bundle\nsis\`.
+2. Browser control panel opens at `http://localhost:5173`.
+3. CLI chat returns assistant output in terminal.
+4. Device control works:
 
-### Option C: Tauri Updater (future)
-Tauri supports auto-updates via a signed update server. Requires code-signing and an update endpoint. Not configured yet — suitable for v0.2+.
+```powershell
+.\npu_cli.ps1 -Command policy -Arguments "PERFORMANCE"
+.\npu_cli.ps1 -Command load -Arguments "GPU"
+.\npu_cli.ps1 -Command switch -Arguments "GPU"
+```
 
----
+## Step 5: Publish From Source
 
-## Known Limitations (v0.1.0)
+For open-source distribution:
 
-- OpenVINO runtime must be installed separately on the user's machine (`setupvars.bat`).
-- Models are not bundled — users download their own into `./models/`.
-- `split-prefill` requires backend launched with `--benchmark` for multi-device mode.
-- Model/backend registry changes require stack restart to take effect.
-- App shell requires backend running separately (not auto-started in this version).
+1. Push repo with scripts/docs.
+2. Users clone and run `.\portable_setup.ps1`.
+3. Users run `.\start_app.ps1` + `.\npu_cli.ps1 -Command chat`.
 
----
+## Known Limits
 
-## Version Bump Workflow
-
-Before each release:
-1. Update `src-tauri/Cargo.toml` → `version = "x.y.z"`
-2. Update `src-tauri/tauri.conf.json` → `"version": "x.y.z"`
-3. Run `.\tauri_build.ps1`
-4. Tag and release.
+1. OpenVINO runtime must still be installed locally.
+2. Models are user-managed and not bundled by default.
+3. `split-prefill` requires multi-device backend state.

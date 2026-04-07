@@ -8,9 +8,11 @@ A minimal C++ CLI wrapper that runs **OpenVINO GenAI LLMs** (OpenVINO-exported m
 
 - Loads OpenVINO GenAI LLMs from folders like `./models/Qwen2.5-0.5B-Instruct`
 - **Scheduler-based device selection** with three policies: BATTERY_SAVER (NPU-first), PERFORMANCE (GPU-first), BALANCED (AUTO heterogeneous)
+- **Explicit device preload/switch flow**: load then switch CPU/GPU/NPU at runtime
 - **Multi-device execution mode** (`--benchmark`): Runs 2-second benchmarks on all devices, loads model on all of them, and allows runtime switching
 - **REST API Server** (`--server`): OpenAI-compatible HTTP endpoints for external integration
-- **Minimal App Shell** (`app_shell/`): Browser UI for chat + runtime controls (Day 10 ready)
+- **Minimal App Shell** (`app_shell/`): Browser control plane (device, mode, features, registry)
+- **Terminal-first chat workflow** via `npu_cli.ps1 -Command chat`
 - **Context-aware routing** (`--context-routing`): Automatically selects best device based on prompt length
 - **Advanced KV-cache** (`--optimize-memory`): INT8 quantization for 50-75% memory savings
 - Auto-detects available hardware and applies policy-based routing
@@ -26,11 +28,17 @@ A minimal C++ CLI wrapper that runs **OpenVINO GenAI LLMs** (OpenVINO-exported m
 ### Minimal App Shell (Day 10)
 
 The repo includes a functional UI at `app_shell/` with 5 panels:
-- Chat
+- Terminal Chat Helper (command generator)
 - Device/Policy
 - Features/Threshold
 - Status/Metrics
 - Cutover Readiness
+
+Interaction model:
+- Browser (`app_shell`) is the runtime control plane.
+- Terminal (`npu_cli.ps1`) is the chat interface.
+- One-shot chat: `./npu_cli.ps1 -Command chat -Arguments "hello"`
+- Interactive chat: `./npu_cli.ps1 -Command chat`
 
 Session UX included in the shell:
 - Prompt history (saved in browser local storage)
@@ -42,36 +50,80 @@ Session UX included in the shell:
 
 For the cutover process and rollback rules, see `CUTOVER_READINESS.md`.
 
-Run it with any static file server, for example:
+## Running the App
+
+### First time — new machine
 
 ```powershell
-python -m http.server 5173 --directory app_shell
+.\portable_setup.ps1
 ```
 
-Then open `http://localhost:5173`.
-Default API base is `http://localhost:8000/v1`.
+Wizard that selects your model, writes the registry, and launches the control panel. No build step — assumes you have a pre-built release (`dist\npu_wrapper.exe` included).
 
-### One-Command Local Launch (App Shell)
-
-Use this script to start backend API and App Shell together:
+### Every-day launch
 
 ```powershell
 .\start_app.ps1
 ```
 
-Common options:
+Starts the backend on port 8000 and opens the browser control panel at `http://localhost:5173`. Uses whatever model and device configuration is saved in the registry.
+
+### Changing settings
+
+All runtime configuration happens through the browser control panel — no need to restart the process or edit files:
+
+| What you want to change | How |
+|---|---|
+| Active inference device (CPU / GPU / NPU) | Control panel → Device / Policy |
+| Performance mode | Control panel → Device / Policy |
+| Feature toggles (split-prefill, memory optimise…) | Control panel → Features |
+| Active model | Control panel → Registry |
+| Add / import a model | Control panel → Registry → Import |
+
+### Terminal chat
 
 ```powershell
-.\start_app.ps1 -ModelPath "./models/Qwen2.5-0.5B-Instruct" -ApiPort 8000 -AppPort 5173 -TimeoutSeconds 120
+.\npu_cli.ps1 -Command chat -Arguments "your prompt here"
 ```
 
-Default URLs:
-- App Shell (primary): `http://localhost:5173`
-- API base: `http://localhost:8000/v1`
+While chatting, the browser control panel shows a live pulse on the connection badge and updates the runtime strip in real time.
 
-Notes:
-- `start_app.ps1` starts `run.ps1` for the backend, then starts a static server for `app_shell/`.
-- `split-prefill` requires at least 2 loaded devices; single-device runs will return `insufficient_devices` for that toggle.
+Other terminal controls:
+
+```powershell
+.\npu_cli.ps1 -Command status
+.\npu_cli.ps1 -Command switch -Arguments "GPU"
+.\npu_cli.ps1 -Command policy -Arguments "PERFORMANCE"
+.\npu_cli.ps1 -Command load  -Arguments "NPU"
+```
+
+---
+
+### Performance Modes And Device Control
+
+Modes:
+- `PERFORMANCE`: prefer GPU for maximum throughput.
+- `BATTERY_SAVER`: prefer NPU for efficiency.
+- `BALANCED`: use AUTO heterogeneous routing (`AUTO:GPU,NPU,CPU`).
+
+Examples:
+
+```powershell
+# Set performance mode
+.\npu_cli.ps1 -Command policy -Arguments "PERFORMANCE"
+
+# Explicitly preload GPU backend, then switch
+.\npu_cli.ps1 -Command load -Arguments "GPU"
+.\npu_cli.ps1 -Command switch -Arguments "GPU"
+
+# Fallback if GPU load fails
+.\npu_cli.ps1 -Command switch -Arguments "CPU"
+```
+
+If GPU load fails:
+- Verify Intel GPU driver and OpenVINO GPU runtime are installed.
+- Use `load GPU` first to get detailed diagnostics from `/v1/cli/device/load`.
+- Continue with CPU/NPU while troubleshooting.
 
 ### Readiness And Daily Trial Automation
 
@@ -131,9 +183,11 @@ If you're upgrading from a previous version, ensure you extract the new OpenVINO
 
 ---
 
-## One-Time Setup (Fresh Computer)
+## For Developers — Building from Source
 
-### Step 1: Download & Install Prerequisites
+> **Regular users don't need this.** The pre-built `dist\npu_wrapper.exe` is included in releases. Only follow these steps if you are modifying the C++ backend.
+
+### Prerequisites
 
 #### A. Visual Studio Build Tools 2022
 1. Download from [visualstudio.microsoft.com](https://visualstudio.microsoft.com/downloads/)
@@ -177,60 +231,25 @@ The OpenVINO documentation may show curl/wget commands for **different versions*
 2. **Important:** Check "Add Python to PATH"
 3. Later you'll run `pip install openvino-genai optimum[openvino]` for model conversion tools
 
-### Step 2: Copy Project Files
-
-Copy these from your source machine:
-```
-NPU_Project/
-├── CMakeLists.txt
-├── build.ps1              ← Build automation script
-├── README.md
-├── src/
-│   └── main.cpp
-└── .gitignore
-```
-
-**Do NOT copy:**
-- `build/` → Auto-generated during compilation
-- `dist/` → Auto-generated after build
-- `runlog.txt` → Auto-deleted after successful runs
-- `venv/` → Python virtual environment (recreate on new machine)
-- Model folders → Download separately
-
-### Step 3: Create Directories
+### Step 2: Build
 
 ```powershell
-cd C:\Users\<YourUsername>\NPU_Project
-
-mkdir build
-mkdir dist
-mkdir models
+.\build.ps1
 ```
 
-### Step 4: Set Up Python Virtual Environment
+Outputs `dist\npu_wrapper.exe` plus all required DLLs. Then run `.\start_app.ps1` to launch normally.
+
+---
+
+## OpenVINO Location (portable)
 
 ```powershell
-# Create virtual environment
-python -m venv venv
-
-# Activate it
-.\venv\Scripts\Activate.ps1
-
-# Install model conversion tools
-pip install optimum[openvino] torch transformers
+$env:OPENVINO_GENAI_DIR = "C:\Users\<YourUsername>\Downloads\openvino_genai_windows_2026.0.0.0_x86_64"
 ```
 
-### Step 5: Update OpenVINO Path in CMakeLists.txt
-
-Edit `CMakeLists.txt` lines 13-14 and replace `ser13` with your Windows username:
-```cmake
-set(OpenVINO_DIR "C:/Users/<YourUsername>/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/cmake")
-set(OpenVINOGenAI_DIR "C:/Users/<YourUsername>/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/cmake")
-```
-
-**Important:** Use forward slashes `/` not backslashes `\` in CMakeLists.txt.
-
-The `build.ps1` script already uses `$env:USERNAME` so it will work on any machine automatically.
+Fallback behavior:
+- `build.ps1` and `run.ps1` auto-search common `Downloads` locations.
+- CMake also checks `OPENVINO_GENAI_DIR` and common default folders.
 
 ---
 
@@ -764,7 +783,7 @@ or force specific backend behavior:
 
 **2) Start App Shell static UI (Terminal B):**
 ```powershell
-cd C:\Users\ser13\NPU_Project
+cd <your-project-folder>
 .\venv\Scripts\Activate.ps1
 python -m http.server 5173 --directory app_shell
 ```
@@ -1244,7 +1263,7 @@ Only use this if build.ps1 fails:
 ```powershell
 # Load OpenVINO environment
 $OV = "C:\Users\$env:USERNAME\Downloads\openvino_genai_windows_2026.0.0.0_x86_64"
-cmd /c "call `"$OV\setupvars.bat`" && cd /d C:\Users\ser13\NPU_Project && cmake --build build --config Release"
+cmd /c "call `"$OV\setupvars.bat`" && cd /d <your-project-folder> && cmake --build build --config Release"
 ```
 
 ---
@@ -1538,9 +1557,7 @@ add_custom_command(TARGET npu_wrapper POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy
         $<TARGET_FILE:npu_wrapper>
         ${CMAKE_SOURCE_DIR}/dist/
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "C:/Users/ser13/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/bin/intel64/Release"
-        ${CMAKE_SOURCE_DIR}/dist/
+    # runtime DLL copy is now handled by build.ps1 using detected OpenVINO root
     COMMAND ${CMAKE_COMMAND} -E copy
         "C:/Windows/System32/msvcp140.dll"
         ${CMAKE_SOURCE_DIR}/dist/
@@ -1854,11 +1871,10 @@ The `.gitignore` file is already configured to ignore these automatically.
 
 ### Before Pushing
 
-Make sure to update hardcoded paths in `CMakeLists.txt`:
-- Replace `C:/Users/ser13/` with `C:/Users/<YourUsername>/`
-- Or document the required path in README
-
-The `build.ps1` script already uses `$env:USERNAME` so it's portable.
+Path portability checklist:
+- Prefer environment variable `OPENVINO_GENAI_DIR` over hardcoded absolute paths.
+- Use project-relative paths in scripts and docs.
+- Verify `build.ps1` and `run.ps1` succeed on a clean machine.
 
 ---
 

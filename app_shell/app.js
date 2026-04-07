@@ -8,12 +8,16 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   const HISTORY_KEY = "npu-app-shell.prompt-history.v1";
   const MAX_HISTORY_ITEMS = 20;
 
-  const isTauri = () => typeof window.__TAURI__ !== "undefined";
-
   let activeChatAbortController = null;
   let healthPollTimer = null;
   let perfPollTimer = null;
   let isChatBusy = false;
+  let cliEventsSource = null;
+  let cliEventsReconnectTimer = null;
+  let cliEventsConnected = false;
+  let cliThinking = false;
+  let connectionState = "checking";
+  let connectionDetail = "";
 
   let modelRegistryCache = [];
   let backendRegistryCache = [];
@@ -52,6 +56,8 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   let lastInferenceStats = {
     device: "-",
     tps: 0,
+    ttft_ms: null,
+    tpot_ms: null,
   };
 
   function nowStamp() {
@@ -78,6 +84,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     const input = el("apiBase");
     if (!input) return;
     input.value = String(url || "").replace(/\/$/, "");
+    restartCliEvents();
   }
 
   function defaultApiBase() {
@@ -112,31 +119,137 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     return Math.max(1, Math.ceil(raw.length / 4));
   }
 
-  function setConnectionState(state, detail) {
+  function renderConnectionBadge() {
     const badge = el("connBadge");
     if (!badge) return;
 
-    badge.classList.remove("online", "offline", "checking");
-    badge.classList.add(state);
+    badge.classList.remove("online", "offline", "checking", "thinking");
+    badge.classList.add(connectionState);
+    badge.classList.toggle("thinking", connectionState === "online" && cliThinking);
 
-    const suffix = detail ? ` - ${detail}` : "";
-    if (state === "online") {
-      badge.textContent = `API: online${suffix}`;
-    } else if (state === "offline") {
+    const suffix = connectionDetail ? ` - ${connectionDetail}` : "";
+    if (connectionState === "online") {
+      const thinkingText = cliThinking ? " - CLI active" : "";
+      badge.textContent = `API: online${suffix}${thinkingText}`;
+    } else if (connectionState === "offline") {
       badge.textContent = `API: offline${suffix}`;
     } else {
       badge.textContent = "API: checking";
     }
   }
 
-  function setChatBusy(nextBusy) {
-    isChatBusy = nextBusy;
-    const send = el("sendChat");
-    const cancel = el("cancelChat");
-
-    if (send) send.disabled = nextBusy;
-    if (cancel) cancel.disabled = !nextBusy;
+  function setConnectionState(state, detail) {
+    connectionState = state;
+    connectionDetail = detail || "";
+    renderConnectionBadge();
   }
+
+  function setCliThinking(thinking) {
+    cliThinking = !!thinking;
+    renderConnectionBadge();
+  }
+
+  function stopCliEvents() {
+    if (cliEventsReconnectTimer) {
+      clearTimeout(cliEventsReconnectTimer);
+      cliEventsReconnectTimer = null;
+    }
+    if (cliEventsSource) {
+      cliEventsSource.close();
+      cliEventsSource = null;
+    }
+    cliEventsConnected = false;
+  }
+
+  function scheduleCliEventsReconnect() {
+    if (cliEventsReconnectTimer) return;
+    cliEventsReconnectTimer = setTimeout(() => {
+      cliEventsReconnectTimer = null;
+      startCliEvents();
+    }, 1500);
+  }
+
+  function handleCliHeartbeat(payload) {
+    if (!payload || typeof payload !== "object") return;
+
+    statusCache = {
+      ...(statusCache || {}),
+      active_device: payload.active_device || statusCache?.active_device || "-",
+      policy: payload.policy || statusCache?.policy || "BALANCED",
+      devices: Array.isArray(payload.loaded_devices)
+        ? payload.loaded_devices
+        : (statusCache?.devices || []),
+    };
+
+    if (Number.isFinite(Number(payload.throughput))) {
+      lastInferenceStats.tps = Number(payload.throughput);
+    }
+    if (Number.isFinite(Number(payload.ttft_ms)) && Number(payload.ttft_ms) > 0) {
+      lastInferenceStats.ttft_ms = Number(payload.ttft_ms);
+    }
+    if (Number.isFinite(Number(payload.tpot_ms)) && Number(payload.tpot_ms) > 0) {
+      lastInferenceStats.tpot_ms = Number(payload.tpot_ms);
+    }
+    if (payload.active_device) {
+      lastInferenceStats.device = payload.active_device;
+    }
+
+    setCliThinking(Boolean(payload.thinking));
+    cliEventsConnected = true;
+    setConnectionState("online", "events");
+    setRuntimeStrip();
+  }
+
+  function startCliEvents() {
+    const root = baseUrl().replace(/\/$/, "");
+    if (!root) return;
+
+    stopCliEvents();
+
+    const eventsUrl = `${root}/cli/events`;
+    try {
+      const source = new EventSource(eventsUrl);
+      cliEventsSource = source;
+
+      source.addEventListener("heartbeat", (event) => {
+        try {
+          const payload = JSON.parse(event.data || "{}");
+          handleCliHeartbeat(payload);
+        } catch {
+          // Ignore malformed heartbeat frames.
+        }
+      });
+
+      source.onopen = () => {
+        cliEventsConnected = true;
+        if (connectionState !== "offline") {
+          setConnectionState("online", "events");
+        }
+      };
+
+      source.onerror = () => {
+        if (cliEventsSource === source) {
+          cliEventsConnected = false;
+          setCliThinking(false);
+          source.close();
+          cliEventsSource = null;
+          if (connectionState !== "offline") {
+            setConnectionState("checking", "events reconnecting");
+          }
+          scheduleCliEventsReconnect();
+        }
+      };
+    } catch {
+      scheduleCliEventsReconnect();
+    }
+  }
+
+  function restartCliEvents() {
+    stopCliEvents();
+    startCliEvents();
+  }
+
+
 
   function addActivity(message, state = "ready") {
     const feed = el("activityFeed");
@@ -179,31 +292,6 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     while (feed.children.length > 80) {
       feed.removeChild(feed.lastChild);
     }
-  }
-
-  async function tauriStartBackend() {
-    if (!isTauri()) return;
-    try {
-      const status = await window.__TAURI__.core.invoke("start_backend");
-      return status;
-    } catch (err) {
-      console.warn("[tauri] start_backend invoke failed:", err);
-      throw err;
-    }
-  }
-
-  async function waitForApiReady(maxMs = 30000) {
-    const started = Date.now();
-    while (Date.now() - started < maxMs) {
-      try {
-        await requestJson("/health", { method: "GET" });
-        return true;
-      } catch {
-        // Keep retrying while backend warms up.
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-    return false;
   }
 
   async function requestJson(path, options = {}, allowFallback = true) {
@@ -369,23 +457,11 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       button.className = "ghost";
       button.textContent = item;
       button.addEventListener("click", () => {
-        el("chatInput").value = item;
-        el("chatInput").focus();
-        updateContextEstimate();
+        if (el("chatInput")) el("chatInput").value = item;
       });
       li.appendChild(button);
       container.appendChild(li);
     }
-  }
-
-  function addPromptToHistory(prompt) {
-    const normalized = String(prompt || "").trim();
-    if (!normalized) return;
-
-    const items = loadPromptHistory().filter((entry) => entry !== normalized);
-    items.unshift(normalized);
-    savePromptHistory(items);
-    renderPromptHistory();
   }
 
   function clearPromptHistory() {
@@ -395,67 +471,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   }
 
   function clearContextBuffer() {
-    if (activeChatAbortController) {
-      activeChatAbortController.abort();
-    }
-    const chatOut = el("chatOutput");
-    const chatIn = el("chatInput");
-    if (chatOut) chatOut.textContent = "";
-    if (chatIn) chatIn.value = "";
-    el("tpsValue").textContent = "0.0";
-    updateContextEstimate();
-    addActivity("Local chat buffer cleared", "ready");
-  }
-
-  function updateContextEstimate() {
-    const input = el("chatInput");
-    const slider = el("contextWindow");
-    const fill = el("contextFill");
-    const label = el("contextLabel");
-    if (!input || !slider || !fill || !label) return;
-
-    const minBudget = Number(slider.min || 0);
-    const maxBudget = Number(slider.max || 8192);
-    const rawBudget = Number(slider.value || 2048);
-    const budget = Math.max(minBudget, Math.min(maxBudget, rawBudget));
-    if (Number(slider.value) !== budget) {
-      slider.value = String(budget);
-    }
-    const used = estimateTokens(input.value);
-    const pct = Math.max(0, Math.min(100, (used / Math.max(1, budget)) * 100));
-    const sliderPct = Math.max(0, Math.min(100, (budget / Math.max(1, maxBudget)) * 100));
-
-    fill.style.width = `${sliderPct}%`;
-    label.textContent = `${used} / ${budget} tokens`;
-
-    const usageHint = el("contextUsageHint");
-    if (usageHint) {
-      usageHint.textContent = `Usage ${pct.toFixed(1)}% of budget. Slider now at ${budget} tokens.`;
-    }
-
-    if (sliderPct > 85) {
-      fill.style.background = "linear-gradient(90deg, #d64553, #b22635)";
-    } else if (sliderPct > 55) {
-      fill.style.background = "linear-gradient(90deg, #e6a63f, #cc7f16)";
-    } else {
-      fill.style.background = "linear-gradient(90deg, #62b0ff, #2478e6)";
-    }
-
-    updateContextPresetState(budget);
-  }
-
-  function updateContextPresetState(budget) {
-    for (const presetButton of document.querySelectorAll(".context-preset")) {
-      const presetValue = Number(presetButton.dataset.value);
-      presetButton.classList.toggle("active", Number.isFinite(presetValue) && presetValue === budget);
-    }
-  }
-
-  function applyContextPreset(value) {
-    const slider = el("contextWindow");
-    if (!slider) return;
-    slider.value = String(value);
-    updateContextEstimate();
+    addActivity("Context cleared", "ready");
   }
 
   function setPrimaryView(nextView) {
@@ -468,22 +484,33 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   }
 
   function setRuntimeStrip() {
-    const requested = normalizeDevice(el("chatDeviceTarget")?.value || "AUTO") || "AUTO";
     const active = normalizeDevice(statusCache?.active_device || "-") || "-";
+    const policy = statusCache?.policy || "-";
     const lastDevice = normalizeDevice(lastInferenceStats.device || "-") || "-";
-    const lastTps = Number.isFinite(lastInferenceStats.tps) ? lastInferenceStats.tps.toFixed(1) : "0.0";
+    const lastTps = Number.isFinite(lastInferenceStats.tps) ? lastInferenceStats.tps.toFixed(1) : "-";
+    const lastTtft = Number.isFinite(lastInferenceStats.ttft_ms) ? `${lastInferenceStats.ttft_ms.toFixed(0)} ms` : "-";
+    const lastTpot = Number.isFinite(lastInferenceStats.tpot_ms) ? `${lastInferenceStats.tpot_ms.toFixed(1)} ms/tok` : "-";
     const loadedDevices = Array.isArray(statusCache?.devices)
       ? statusCache.devices.map((d) => normalizeDevice(d)).filter(Boolean)
       : [];
+    const availableDevices = Array.isArray(statusCache?.available_devices)
+      ? statusCache.available_devices.map((item) => normalizeDevice(item?.id || item)).filter(Boolean)
+      : [];
 
-    if (el("chatRequestedDevice")) el("chatRequestedDevice").textContent = requested;
     if (el("chatActiveDevice")) el("chatActiveDevice").textContent = active;
-    if (el("chatLastDevice")) el("chatLastDevice").textContent = lastDevice;
-    if (el("chatLastTps")) el("chatLastTps").textContent = lastTps;
+    if (el("chatPolicyValue"))  el("chatPolicyValue").textContent  = policy;
+    if (el("chatLastDevice"))   el("chatLastDevice").textContent   = lastDevice;
+    if (el("chatLastTps"))      el("chatLastTps").textContent      = lastTps;
+    if (el("chatLastTtft"))     el("chatLastTtft").textContent     = lastTtft;
+    if (el("chatLastTpot"))     el("chatLastTpot").textContent     = lastTpot;
     if (el("chatDeviceAvailability")) {
-      el("chatDeviceAvailability").textContent = loadedDevices.length
+      const loadedText = loadedDevices.length
         ? `Loaded devices: ${loadedDevices.join(", ")}`
         : "Loaded devices: (none)";
+      const availableText = availableDevices.length
+        ? ` | OpenVINO sees: ${availableDevices.join(", ")}`
+        : "";
+      el("chatDeviceAvailability").textContent = `${loadedText}${availableText}`;
     }
   }
 
@@ -519,6 +546,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
 
     applyToSelect("chatDeviceTarget");
     applyToSelect("deviceSelect");
+    applyToSelect("wDeviceSelect");
   }
 
   function syncChatModelOptions(selectedHint = "") {
@@ -876,7 +904,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   function renderPerfCounters() {
     const tps = numericOrNull(metricsCache?.throughput_tok_s);
     const displayTps = tps !== null && tps > 0 ? tps : 0;
-    el("tpsValue").textContent = displayTps.toFixed(1);
+    if (el("tpsValue")) el("tpsValue").textContent = displayTps.toFixed(1);
 
     // Show real total_ms latency from the latest metrics record.
     const totalMs = numericOrNull(metricsCache?.total_ms);
@@ -968,6 +996,9 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       if (el("deviceSelect")) {
         el("deviceSelect").value = result.active_device || el("deviceSelect").value;
       }
+      if (el("wDeviceSelect")) {
+        el("wDeviceSelect").value = normalizeDevice(result.active_device) || el("wDeviceSelect").value;
+      }
       if (el("chatDeviceTarget")) {
         const target = normalizeDevice(el("chatDeviceTarget").value || "AUTO");
         const loadedSet = new Set((result.devices || []).map((d) => normalizeDevice(d)));
@@ -977,6 +1008,9 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       }
       if (el("policySelect")) {
         el("policySelect").value = result.policy || el("policySelect").value;
+      }
+      if (el("wPolicySelect")) {
+        el("wPolicySelect").value = result.policy || el("wPolicySelect").value;
       }
 
       const mappings = {
@@ -1236,17 +1270,25 @@ if (window.__NPU_APP_SHELL_LOADED__) {
 
   async function switchDevice() {
     try {
+      const target = normalizeDevice(el("deviceSelect")?.value || "");
+      if (!target) {
+        throw new Error("Select a target device first");
+      }
       addActivity("Checking NPU route...", "busy");
+      await requestJson("/cli/device/load", {
+        method: "POST",
+        body: JSON.stringify({ device: target }),
+      });
       const result = await requestJson("/cli/device/switch", {
         method: "POST",
-        body: JSON.stringify({ device: el("deviceSelect").value }),
+        body: JSON.stringify({ device: target }),
       });
       printJson(el("devicePolicyOutput"), result);
-      addActivity(`Device switched to ${result.new_active_device || el("deviceSelect").value}`, "ready");
+      addActivity(`Device switched to ${result.new_active_device || target}`, "ready");
       await refreshStatus();
     } catch (err) {
       el("devicePolicyOutput").textContent = String(err.message || err);
-      addActivity(`Device switch failed: ${String(err.message || err)}`, "error");
+      addActivity(`Device switch failed: ${String(err.message || err)} | Try CPU fallback while debugging accelerator drivers`, "error");
     }
   }
 
@@ -1478,8 +1520,12 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         addActivity(`Model loaded on ${target}`, "ready");
         await refreshStatus(); // Updates loaded devices in statusCache
       } catch (loadErr) {
+        const lowered = String(loadErr.message || loadErr).toLowerCase();
+        const extraHint = lowered.includes("gpu")
+          ? " | Hint: verify Intel GPU runtime/driver and try CPU/NPU fallback"
+          : "";
         addActivity(
-          `Could not load model on ${target}: ${String(loadErr.message || loadErr)}`,
+          `Could not load model on ${target}: ${String(loadErr.message || loadErr)}${extraHint}`,
           "error"
         );
         if (select) select.disabled = false;
@@ -1550,47 +1596,23 @@ if (window.__NPU_APP_SHELL_LOADED__) {
 
   async function summarizeContext() {
     const output = el("chatOutput");
-    const currentContent = output ? output.textContent.trim() : "";
-    if (!currentContent || currentContent.length < 20) {
-      addActivity("Not enough context to summarize", "busy");
-      return;
+    if (output) {
+      output.textContent = [
+        "Summarize is disabled in terminal-chat mode.",
+        "Use terminal chat instead:",
+        ".\\npu_cli.ps1 -Command chat -Arguments \"Summarize the latest context and key decisions\"",
+      ].join("\n");
     }
-    if (isChatBusy) return;
-    setChatBusy(true);
-    addActivity("Summarizing context...", "busy");
-    try {
-      const result = await requestJson("/chat/completions", {
-        method: "POST",
-        body: JSON.stringify({
-          model: el("chatModel").value || "openvino",
-          messages: [
-            {
-              role: "user",
-              content: `Summarize the following conversation concisely so it can serve as compressed context memory:\n\n${currentContent}`,
-            },
-          ],
-          stream: false,
-          temperature: 0.3,
-          max_tokens: 300,
-        }),
-      });
-      const summary = result?.choices?.[0]?.message?.content || "";
-      if (output && summary) {
-        output.textContent = `[Context Summary]\n${summary}`;
-        addActivity("Context summarized and compressed", "ready");
-        updateContextEstimate();
-      }
-    } catch (err) {
-      addActivity(`Summarize failed: ${String(err.message || err)}`, "error");
-    } finally {
-      setChatBusy(false);
-    }
+    addActivity("Summarize disabled: terminal-chat mode", "busy");
   }
 
   async function probeConnection() {
     setConnectionState("checking");
     try {
       const result = await requestJson("/health", { method: "GET" });
+      if (!cliEventsConnected) {
+        startCliEvents();
+      }
       const status = el("statusOutput");
       if (status) {
         status.textContent = `API reachable. backend=${result.backend} status=${result.status}`;
@@ -1622,277 +1644,6 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         // Ignore background polling errors.
       }
     }, 6000);
-  }
-
-  async function handleChatSend() {
-    if (isChatBusy) return;
-
-    const input = el("chatInput");
-    const prompt = input.value.trim();
-    const output = el("chatOutput");
-
-    if (!prompt) {
-      output.textContent = "Type a prompt before sending.";
-      return;
-    }
-
-    output.textContent = "";
-
-    if (activeChatAbortController) {
-      activeChatAbortController.abort();
-    }
-    activeChatAbortController = new AbortController();
-
-    setChatBusy(true);
-    renderStatusCards(statusCache || {});
-
-    const body = {
-      model: el("chatModel")?.value || statusCache?.selected_model || "openvino",
-      messages: [{ role: "user", content: prompt }],
-      stream: el("chatStream").checked,
-      temperature: Number(el("chatTemperature").value || 0.7),
-      max_tokens: Number(el("chatMaxTokens").value || 128),
-    };
-
-    const startedAt = Date.now();
-    let generatedTokenEstimate = 0;
-    let generatedCharCount = 0;
-    let clientFirstTokenAt = null;
-    let clientTtftMs = null;
-    let clientTpotMs = null;
-
-    const targetDevice = el("chatDeviceTarget")?.value || "";
-    const loadedSet = new Set((statusCache?.devices || []).map((d) => normalizeDevice(d)));
-
-    if (targetDevice !== "AUTO" && targetDevice && !loadedSet.has(targetDevice)) {
-      addActivity(`Loading model on ${targetDevice} — please wait...`, "busy");
-      try {
-        await requestJson("/cli/device/load", {
-          method: "POST",
-          body: JSON.stringify({ device: targetDevice }),
-        });
-        addActivity(`Model loaded on ${targetDevice}`, "ready");
-        await refreshStatus();
-      } catch (loadErr) {
-        addActivity(`Could not load model on ${targetDevice}: ${String(loadErr.message || loadErr)}`, "error");
-        output.textContent = `Chat blocked: could not load model on ${targetDevice}.`;
-        activeChatAbortController = null;
-        setChatBusy(false);
-        return;
-      }
-    }
-
-    if (targetDevice && targetDevice !== normalizeDevice(statusCache?.active_device || "")) {
-      addActivity(`Switching device to ${targetDevice}...`, "busy");
-      try {
-        await requestJson("/cli/device/switch", {
-          method: "POST",
-          body: JSON.stringify({ device: targetDevice }),
-        });
-        if (el("deviceSelect")) el("deviceSelect").value = targetDevice;
-        await refreshStatus();
-      } catch (switchErr) {
-        addActivity(`Device pre-switch failed: ${String(switchErr.message || switchErr)}`, "error");
-        output.textContent = `Chat blocked: could not switch to ${targetDevice}.`;
-        activeChatAbortController = null;
-        setChatBusy(false);
-        return;
-      }
-    }
-
-    addActivity("Checking NPU...", "busy");
-    addActivity(`Loading model: ${body.model}...`, "busy");
-
-    try {
-      addPromptToHistory(prompt);
-      addActivity("Inferencing...", "busy");
-
-      if (!body.stream) {
-        const payload = await requestJson("/chat/completions", {
-          method: "POST",
-          body: JSON.stringify(body),
-          signal: activeChatAbortController.signal,
-        });
-        const content = payload?.choices?.[0]?.message?.content || "";
-        output.textContent = content;
-        generatedTokenEstimate = estimateTokens(content);
-        generatedCharCount = content.length;
-        // Non-streaming: TTFT ≈ full round-trip (first token not isolable)
-        clientTtftMs = Date.now() - startedAt;
-        clientTpotMs = generatedTokenEstimate > 1
-          ? clientTtftMs / generatedTokenEstimate
-          : clientTtftMs;
-
-        const provisional = {
-          ...(metricsCache || {}),
-          ttft_ms: clientTtftMs,
-          tpot_ms: clientTpotMs,
-          throughput_tok_s: generatedTokenEstimate / Math.max(0.001, (Date.now() - startedAt) / 1000),
-          total_ms: Date.now() - startedAt,
-          completion_tokens: generatedTokenEstimate,
-          device: String(statusCache?.active_device || targetDevice || metricsCache?.device || "-").toUpperCase(),
-        };
-        lastDerivedMetrics = {
-          ttft_ms: provisional.ttft_ms,
-          tpot_ms: provisional.tpot_ms,
-          throughput_tok_s: provisional.throughput_tok_s,
-          total_ms: provisional.total_ms,
-          completion_tokens: provisional.completion_tokens,
-          device: provisional.device,
-        };
-        metricsCache = provisional;
-        renderPerfCounters();
-        renderMetricsCards(provisional);
-      } else {
-        const response = await fetch(`${baseUrl()}/chat/completions`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          signal: activeChatAbortController.signal,
-        });
-
-        if (!response.ok || !response.body) {
-          const errPayload = await response.json().catch(() => ({}));
-          throw new Error(errPayload?.error?.message || `HTTP ${response.status}`);
-        }
-
-        setConnectionState("online");
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder("utf-8");
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data:")) continue;
-
-            const data = trimmed.slice(5).trim();
-            if (data === "[DONE]") {
-              appendText(output, "\n\n[DONE]");
-              continue;
-            }
-
-            try {
-              const parsed = JSON.parse(data);
-              const chunk = parsed?.choices?.[0]?.delta?.content;
-              if (!chunk) continue;
-              if (clientFirstTokenAt === null) clientFirstTokenAt = Date.now();
-              appendText(output, chunk);
-              generatedCharCount += chunk.length;
-              generatedTokenEstimate = Math.max(1, Math.round(generatedCharCount / 4));
-
-              const elapsedSec = Math.max(0.001, (Date.now() - startedAt) / 1000);
-              const liveTps = generatedTokenEstimate / elapsedSec;
-              const liveTtftMs = clientFirstTokenAt !== null ? (clientFirstTokenAt - startedAt) : null;
-              const liveTpotMs = (liveTtftMs !== null && generatedTokenEstimate > 1)
-                ? ((elapsedSec * 1000 - liveTtftMs) / (generatedTokenEstimate - 1))
-                : null;
-
-              const liveMetrics = {
-                ...(metricsCache || {}),
-                ttft_ms: liveTtftMs ?? metricsCache?.ttft_ms,
-                tpot_ms: liveTpotMs ?? metricsCache?.tpot_ms,
-                throughput_tok_s: liveTps,
-                total_ms: elapsedSec * 1000,
-                completion_tokens: generatedTokenEstimate,
-                device: String(statusCache?.active_device || targetDevice || metricsCache?.device || "-").toUpperCase(),
-              };
-              lastDerivedMetrics = {
-                ttft_ms: liveMetrics.ttft_ms,
-                tpot_ms: liveMetrics.tpot_ms,
-                throughput_tok_s: liveMetrics.throughput_tok_s,
-                total_ms: liveMetrics.total_ms,
-                completion_tokens: liveMetrics.completion_tokens,
-                device: liveMetrics.device,
-              };
-              metricsCache = liveMetrics;
-              el("tpsValue").textContent = liveTps.toFixed(1);
-              sampleToSpark(liveTps);
-              renderPerfCounters();
-              renderMetricsCards(liveMetrics);
-            } catch {
-              // Ignore malformed partial chunks.
-            }
-          }
-        }
-      }
-
-      // Finalize client-side TTFT/TPOT for streaming path
-      const elapsedSec = Math.max(0.001, (Date.now() - startedAt) / 1000);
-      if (clientFirstTokenAt !== null && clientTtftMs === null) {
-        clientTtftMs = clientFirstTokenAt - startedAt;
-        clientTpotMs = generatedTokenEstimate > 1
-          ? (elapsedSec * 1000 - clientTtftMs) / (generatedTokenEstimate - 1)
-          : clientTtftMs;
-      } else if (clientTtftMs === null && generatedTokenEstimate > 0) {
-        // Non-streaming fallback: full time as TTFT proxy
-        clientTtftMs = elapsedSec * 1000;
-        clientTpotMs = generatedTokenEstimate > 1 ? clientTtftMs / generatedTokenEstimate : clientTtftMs;
-      }
-      const tps = generatedTokenEstimate / elapsedSec;
-      el("tpsValue").textContent = Number.isFinite(tps) ? tps.toFixed(1) : "0.0";
-
-      lastInferenceStats.device = statusCache?.active_device || targetDevice || "AUTO";
-      lastInferenceStats.tps = Number.isFinite(tps) ? tps : 0;
-      setRuntimeStrip();
-
-      addActivity("Inference complete", "ready");
-
-      await Promise.allSettled([
-        refreshStatus(),
-        fetchMetrics(true, "last"),
-        fetchMemoryEvidence(true),
-      ]);
-
-      // Overlay client-measured timing into metricsCache where backend returned sentinel –1 values
-      if (clientTtftMs !== null && metricsCache) {
-        if (!(metricsCache.ttft_ms > 0))           metricsCache.ttft_ms          = clientTtftMs;
-        if (!(metricsCache.tpot_ms > 0))           metricsCache.tpot_ms          = clientTpotMs;
-        if (!(metricsCache.throughput_tok_s > 0))  metricsCache.throughput_tok_s = tps;
-        if (!(metricsCache.completion_tokens > 0)) metricsCache.completion_tokens = generatedTokenEstimate;
-        if (!(metricsCache.total_ms > 0))          metricsCache.total_ms         = elapsedSec * 1000;
-        metricsCache.device = (metricsCache.device && metricsCache.device !== "-")
-          ? metricsCache.device
-          : (statusCache?.active_device || targetDevice || "?");
-        lastDerivedMetrics = {
-          ttft_ms: metricsCache.ttft_ms,
-          tpot_ms: metricsCache.tpot_ms,
-          throughput_tok_s: metricsCache.throughput_tok_s,
-          total_ms: metricsCache.total_ms,
-          completion_tokens: metricsCache.completion_tokens,
-          device: metricsCache.device,
-        };
-        renderPerfCounters();
-        renderMetricsCards(metricsCache);
-      }
-    } catch (err) {
-      if (err?.name === "AbortError") {
-        appendText(output, "\n\n[Cancelled]");
-        addActivity("Inference cancelled", "busy");
-        return;
-      }
-
-      setConnectionState("offline", "chat failed");
-      output.textContent = `Chat failed: ${String(err.message || err)}`;
-      addActivity(`Chat failed: ${String(err.message || err)}`, "error");
-    } finally {
-      activeChatAbortController = null;
-      setChatBusy(false);
-      renderStatusCards(statusCache || {});
-    }
-  }
-
-  function cancelChat() {
-    if (!activeChatAbortController) return;
-    activeChatAbortController.abort();
   }
 
   function on(id, event, handler) {
@@ -2207,17 +1958,6 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   }
 
   async function bootstrap() {
-    if (isTauri()) {
-      setConnectionState("checking");
-      try {
-        await tauriStartBackend();
-      } catch (err) {
-        el("statusOutput").textContent = `Tauri backend start failed: ${String(err.message || err)}`;
-        addActivity("Tauri backend start failed", "error");
-      }
-      await waitForApiReady(30000);
-    }
-
     try {
       await Promise.all([
         refreshStatus(),
@@ -2227,12 +1967,6 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         fetchMemoryEvidence(true),
       ]);
       addActivity("Runtime ready", "ready");
-      if (statusCache?.active_device && el("chatDeviceTarget")) {
-        const dv = normalizeDevice(statusCache.active_device);
-        const matchOpt = Array.from(el("chatDeviceTarget").options).find((o) => o.value === dv);
-        if (matchOpt) el("chatDeviceTarget").value = dv;
-      }
-      syncChatModelOptions(statusCache?.selected_model || "");
       setRuntimeStrip();
     } catch (err) {
       el("statusOutput").textContent = String(err.message || err);
@@ -2240,7 +1974,6 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     } finally {
       updateThresholdControlState();
       validateThresholdInput();
-      updateContextEstimate();
       renderCommandList();
     }
   }
@@ -2248,15 +1981,16 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   function initializeApp() {
     setPrimaryView("workspace");
 
-    on("sendChat", "click", handleChatSend);
-    on("cancelChat", "click", cancelChat);
-    on("reconnectNow", "click", probeConnection);
-    on("clearHistory", "click", clearPromptHistory);
-    on("clearContext", "click", clearContextBuffer);
-    on("summarizeContext", "click", summarizeContext);
-
     on("switchDevice", "click", switchDevice);
+    on("wSwitchDevice", "click", () => {
+      if (el("deviceSelect") && el("wDeviceSelect")) el("deviceSelect").value = el("wDeviceSelect").value;
+      switchDevice();
+    });
     on("setPolicy", "click", setPolicy);
+    on("wSetPolicy", "click", () => {
+      if (el("policySelect") && el("wPolicySelect")) el("policySelect").value = el("wPolicySelect").value;
+      setPolicy();
+    });
     on("setThreshold", "click", setThreshold);
     on("refreshStatus", "click", refreshStatus);
     on("fetchMetrics", "click", () => fetchMetrics(false));
@@ -2340,17 +2074,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       });
     }
 
-    for (const presetButton of document.querySelectorAll(".context-preset")) {
-      presetButton.addEventListener("click", () => {
-        const value = Number(presetButton.dataset.value);
-        applyContextPreset(value);
-      });
-    }
-
     on("thresholdInput", "input", validateThresholdInput);
-    on("chatInput", "input", updateContextEstimate);
-    on("contextWindow", "input", updateContextEstimate);
-    on("chatDeviceTarget", "change", handleDeviceTargetChange);
     on("buildTerminalCommand", "click", buildTerminalCommand);
     on("copyTerminalCommand", "click", copyTerminalCommand);
     on("applyBackendPreset", "click", applyBackendPreset);
@@ -2361,10 +2085,10 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       preset.addEventListener("click", () => applyModelPreset(preset));
     }
 
-    renderPromptHistory();
     setRuntimeStrip();
     bindGlobalShortcuts();
     startConnectionPolling();
+    startCliEvents();
     startPerformancePolling();
     bootstrap();
   }

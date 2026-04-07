@@ -11,6 +11,8 @@
 #include <filesystem>
 #include <optional>
 #include <mutex>
+#include <thread>
+#include <openvino/openvino.hpp>
 #include "../OpenVINO/Backend/KVCacheMonitor.h"
 
 using json = nlohmann::json;
@@ -26,6 +28,56 @@ const char* kRegistryDir = "./registry";
 const char* kModelsRegistryPath = "./registry/models_registry.json";
 const char* kBackendsRegistryPath = "./registry/backends_registry.json";
 std::mutex g_metrics_file_mutex;
+std::atomic<int> g_active_chat_requests{0};
+
+json probe_available_devices() {
+    json devices = json::array();
+    try {
+        ov::Core core;
+        for (const auto& id : core.get_available_devices()) {
+            json item = { {"id", id} };
+            try {
+                item["name"] = core.get_property(id, ov::device::full_name);
+            } catch (...) {
+                item["name"] = "unknown";
+            }
+            devices.push_back(item);
+        }
+    } catch (...) {
+        // Keep diagnostics best-effort to avoid masking original load failures.
+    }
+    return devices;
+}
+
+json build_device_load_hints(const std::string& device, const std::string& error_text, const json& available) {
+    json hints = json::array();
+    std::string upper_device = device;
+    std::transform(upper_device.begin(), upper_device.end(), upper_device.begin(), [](unsigned char c) {
+        return static_cast<char>(std::toupper(c));
+    });
+    std::string lower_error = error_text;
+    std::transform(lower_error.begin(), lower_error.end(), lower_error.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+
+    if (upper_device == "GPU") {
+        hints.push_back("Verify Intel GPU drivers and OpenVINO GPU runtime are installed.");
+        hints.push_back("Try CPU or NPU first: .\\npu_cli.ps1 -Command switch -Arguments \"CPU\"");
+        hints.push_back("Attempt explicit preload: .\\npu_cli.ps1 -Command load -Arguments \"GPU\"");
+    }
+    if (upper_device == "NPU") {
+        hints.push_back("Confirm Intel NPU runtime/driver package is installed and up to date.");
+        hints.push_back("Fallback quickly with .\\npu_cli.ps1 -Command switch -Arguments \"CPU\".");
+    }
+    if (available.empty()) {
+        hints.push_back("No accelerator devices were discovered by OpenVINO on this host.");
+    }
+    if (lower_error.find("unsupported") != std::string::npos ||
+        lower_error.find("not found") != std::string::npos) {
+        hints.push_back("The requested device plugin may be missing in the active OpenVINO runtime.");
+    }
+    return hints;
+}
 
 void set_json_response(httplib::Response& res, const json& body, int status = 200) {
     res.status = status;
@@ -529,6 +581,10 @@ RestAPIServer::RestAPIServer(BackendPool* pool, RuntimeConfig* config, KVCacheMo
         handle_cli_metrics(req, res);
     });
 
+    server_->Get("/v1/cli/events", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_cli_events(req, res);
+    });
+
     server_->Get("/v1/cli/memory", [this](const httplib::Request& req, httplib::Response& res) {
         handle_cli_memory(req, res);
     });
@@ -640,7 +696,23 @@ bool RestAPIServer::is_running() const {
 
 void RestAPIServer::handle_chat_completions(const httplib::Request& req, httplib::Response& res) {
     try {
+        const std::string cli_header = req.get_header_value("x-npu-cli");
+        if (to_lower_copy(cli_header) != "true") {
+            set_error_response(
+                res,
+                403,
+                "terminal_chat_only",
+                "Chat is terminal-only. Use .\\npu_cli.ps1 -Command chat",
+                json{{"required_header", "x-npu-cli: true"}}
+            );
+            return;
+        }
+
         auto started = std::chrono::high_resolution_clock::now();
+        struct ChatActiveGuard {
+            ChatActiveGuard() { g_active_chat_requests.fetch_add(1, std::memory_order_relaxed); }
+            ~ChatActiveGuard() { g_active_chat_requests.fetch_sub(1, std::memory_order_relaxed); }
+        } chat_guard;
 
         // Parse incoming JSON request
         json request_body = json::parse(req.body);
@@ -855,6 +927,42 @@ void RestAPIServer::handle_chat_completions(const httplib::Request& req, httplib
     }
 }
 
+void RestAPIServer::handle_cli_events(const httplib::Request& req, httplib::Response& res) {
+    (void)req;
+
+    res.set_header("Cache-Control", "no-cache");
+    res.set_header("Connection", "keep-alive");
+    res.set_header("X-Accel-Buffering", "no");
+
+    res.set_chunked_content_provider(
+        "text/event-stream",
+        [this](size_t, httplib::DataSink& sink) {
+            if (!sink.is_writable()) {
+                return false;
+            }
+
+            json event = {
+                {"ts", std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count()},
+                {"active_device", backend_pool_->get_active_device()},
+                {"policy", policy_to_string(config_->get_policy())},
+                {"loaded_devices", backend_pool_->get_loaded_devices()},
+                {"thinking", g_active_chat_requests.load(std::memory_order_relaxed) > 0}
+            };
+
+            const BackendMetrics metrics = backend_pool_->get_active_metrics();
+            event["ttft_ms"] = metrics.ttft_ms;
+            event["tpot_ms"] = metrics.tpot_ms;
+            event["throughput"] = metrics.throughput;
+
+            const std::string frame = std::string("event: heartbeat\n") + "data: " + event.dump() + "\n\n";
+            sink.write(frame.data(), frame.size());
+            std::this_thread::sleep_for(std::chrono::milliseconds(900));
+            return true;
+        }
+    );
+}
+
 void RestAPIServer::handle_list_models(const httplib::Request& req, httplib::Response& res) {
     json response = {
         {"object", "list"},
@@ -894,6 +1002,7 @@ void RestAPIServer::handle_cli_status(const httplib::Request& req, httplib::Resp
             {"policy", policy_to_string(config_->get_policy())},
             {"active_device", backend_pool_->get_active_device()},
             {"devices", devices},
+            {"available_devices", probe_available_devices()},
             {"json_output", config_->get_json_mode() ? "ON" : "OFF"},
             {"split_prefill", config_->get_split_prefill() ? "ON" : "OFF"},
             {"context_routing", config_->get_context_routing() ? "ON" : "OFF"},
@@ -978,8 +1087,17 @@ void RestAPIServer::handle_cli_device_load(const httplib::Request& req, httplib:
         std::string load_error;
         bool ok = backend_pool_->load_device(device, load_error);
         if (!ok) {
+            const json available = probe_available_devices();
+            const json details = {
+                {"requested_device", device},
+                {"loaded_devices", backend_pool_->get_loaded_devices()},
+                {"available_devices", available},
+                {"hints", build_device_load_hints(device, load_error, available)},
+                {"raw_error", load_error}
+            };
             set_error_response(res, 422, "device_load_failed",
-                "Failed to load model on device " + device + ": " + load_error);
+                "Failed to load model on device " + device + ": " + load_error,
+                details);
             return;
         }
 
