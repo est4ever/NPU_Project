@@ -71,6 +71,9 @@ private:
     // GET /v1/cli/metrics - Get metrics data
     void handle_cli_metrics(const class httplib::Request& req, class httplib::Response& res);
 
+    // GET /v1/cli/events - Server-sent events heartbeat for browser control plane
+    void handle_cli_events(const class httplib::Request& req, class httplib::Response& res);
+
     // GET /v1/cli/memory - Get live memory stats / optimization evidence
     void handle_cli_memory(const class httplib::Request& req, class httplib::Response& res);
 

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Loomis</title>
-  <link rel="stylesheet" href="./styles.css?v=20260323b" />
+  <link rel="stylesheet" href="./styles.css?v=20260406c" />
 </head>
 <body>
   <header class="app-header glass">
@@ -42,75 +42,46 @@
     <section class="panel glass workspace-only" id="chatPanel">
       <div class="panel-head">
         <h2>Chat</h2>
-        <div class="tps-pill">TPS: <strong id="tpsValue">0.0</strong></div>
       </div>
-
-      <div class="row">
-        <label>Model
-          <select id="chatModel">
-            <option value="openvino">openvino</option>
-          </select>
-        </label>
-        <label>Run On
-          <select id="chatDeviceTarget">
-            <option value="AUTO" selected>AUTO</option>
-            <option value="CPU">CPU</option>
-            <option value="GPU">GPU</option>
-            <option value="NPU">NPU</option>
-          </select>
-        </label>
-        <label>Temperature <input id="chatTemperature" type="number" min="0" max="2" step="0.1" value="0.7" /></label>
-        <label>Max Tokens <input id="chatMaxTokens" type="number" min="1" step="1" value="128" /></label>
-        <label><input id="chatStream" type="checkbox" checked /> Stream</label>
-      </div>
-
       <div class="runtime-strip" id="runtimeStrip">
-        <span class="runtime-chip">Requested: <strong id="chatRequestedDevice">AUTO</strong></span>
-        <span class="runtime-chip">Active Runtime: <strong id="chatActiveDevice">-</strong></span>
-        <span class="runtime-chip">Last Inference Device: <strong id="chatLastDevice">-</strong></span>
-        <span class="runtime-chip">Last TPS: <strong id="chatLastTps">0.0</strong></span>
+        <span class="runtime-chip">Device: <strong id="chatActiveDevice">-</strong></span>
+        <span class="runtime-chip">Policy: <strong id="chatPolicyValue">-</strong></span>
+        <span class="runtime-chip">Last device: <strong id="chatLastDevice">-</strong></span>
+        <span class="runtime-chip">TPS: <strong id="chatLastTps">-</strong></span>
+        <span class="runtime-chip">TTFT: <strong id="chatLastTtft">-</strong></span>
+        <span class="runtime-chip">TPOT: <strong id="chatLastTpot">-</strong></span>
       </div>
       <p class="hint" id="chatDeviceAvailability">Loaded devices: -</p>
-
-      <div class="context-wrap">
-        <div class="context-top">
-          <strong>Context Window</strong>
-          <span id="contextLabel">0 / 2048 tokens</span>
-        </div>
-        <input id="contextWindow" type="range" min="0" max="8192" step="32" value="2048" />
-        <div class="row context-presets">
-          <button type="button" class="ghost context-preset" data-value="0">0</button>
-          <button type="button" class="ghost context-preset" data-value="1024">1K</button>
-          <button type="button" class="ghost context-preset" data-value="2048">2K</button>
-          <button type="button" class="ghost context-preset" data-value="4096">4K</button>
-          <button type="button" class="ghost context-preset" data-value="8192">8K</button>
-        </div>
-        <div class="progress-track">
-          <div id="contextFill" class="progress-fill"></div>
-        </div>
-        <p id="contextUsageHint" class="hint">Slider controls budget; usage updates from your prompt length.</p>
+      <div class="terminal-chat-hint">
+        <p>Chat runs in the terminal.</p>
+        <pre class="inline-cmd">.\npu_cli.ps1</pre>
+        <p class="hint">Metrics (device, TTFT, TPOT, latency, RAM) print after each response.</p>
       </div>
-
-      <textarea id="chatInput" rows="6" placeholder="Ask anything..."></textarea>
-
+      <!-- device + policy controls -->
       <div class="row">
-        <button id="sendChat">Send</button>
-        <button id="cancelChat" disabled>Cancel</button>
-        <button id="reconnectNow" class="ghost">Reconnect</button>
-        <button id="clearContext" class="ghost" title="Clear local session buffer">Clear Memory</button>
-        <button id="summarizeContext" class="ghost" title="Compress current output into reusable notes">Summarize Context</button>
+        <label>Device
+          <select id="wDeviceSelect">
+            <option>CPU</option>
+            <option>GPU</option>
+            <option>NPU</option>
+            <option selected>AUTO</option>
+          </select>
+        </label>
+        <button id="wSwitchDevice">Switch Device</button>
+        <label>Mode
+          <select id="wPolicySelect">
+            <option value="BALANCED">BALANCED</option>
+            <option value="PERFORMANCE">PERFORMANCE</option>
+            <option value="BATTERY_SAVER">BATTERY_SAVER</option>
+          </select>
+        </label>
+        <button id="wSetPolicy">Set Mode</button>
       </div>
-
-      <pre id="chatOutput" class="output"></pre>
-
-      <details>
-        <summary>Prompt History</summary>
-        <div class="history-head">
-          <span>Recent prompts</span>
-          <button id="clearHistory" type="button" class="ghost">Clear</button>
-        </div>
-        <ul id="promptHistory" class="history-list"></ul>
-      </details>
+      <!-- hidden stubs kept for JS compatibility -->
+      <input id="chatRequestedDevice" type="hidden" value="AUTO" />
+      <input id="chatModel"          type="hidden" value="openvino" />
+      <input id="chatDeviceTarget"   type="hidden" value="AUTO" />
+      <input id="contextWindow"      type="hidden" value="2048" />
     </section>
 
     <section class="panel glass workspace-only" id="perfPanel">
@@ -185,15 +156,16 @@
         </label>
         <button id="switchDevice">Switch Device</button>
 
-        <label>Policy
+        <label>Performance Mode
           <select id="policySelect">
-            <option>BALANCED</option>
-            <option>PERFORMANCE</option>
-            <option>BATTERY_SAVER</option>
+            <option value="BALANCED">BALANCED (AUTO:GPU,NPU,CPU)</option>
+            <option value="PERFORMANCE">PERFORMANCE (prefer GPU)</option>
+            <option value="BATTERY_SAVER">BATTERY_SAVER (prefer NPU)</option>
           </select>
         </label>
-        <button id="setPolicy">Set Policy</button>
+        <button id="setPolicy">Set Performance Mode</button>
       </div>
+      <p class="hint">If GPU load fails, try switching to CPU/NPU first, then run terminal command <strong>.\npu_cli.ps1 -Command load -Arguments "GPU"</strong> to view full diagnostics.</p>
 
       <div class="toggle-grid">
         <label><input data-feature="json" class="feature-toggle" type="checkbox" /> json</label>
@@ -350,6 +322,6 @@
     </div>
   </dialog>
 
-  <script src="./app.js?v=20260324b"></script>
+  <script src="./app.js?v=20260406c"></script>
 </body>
 </html>

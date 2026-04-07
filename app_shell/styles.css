@@ -118,6 +118,23 @@ h3 {
   background: color-mix(in srgb, var(--warn) 12%, white);
 }
 
+.conn-badge.thinking {
+  animation: connPulse 1.1s ease-in-out infinite;
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 32%, transparent);
+}
+
+@keyframes connPulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 30%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 8px color-mix(in srgb, var(--ok) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 0%, transparent);
+  }
+}
+
 .readiness-bar {
   margin: 0 12px;
   border-radius: 12px;

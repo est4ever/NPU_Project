@@ -1,8 +1,0 @@
-{
-  "identifier": "default",
-  "description": "Default permissions for NPU Companion",
-  "windows": ["main"],
-  "permissions": [
-    "core:default"
-  ]
-}

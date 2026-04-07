@@ -9,10 +9,29 @@ set(CMAKE_BUILD_TYPE Release)
 # Force Release configuration only
 set(CMAKE_CONFIGURATION_TYPES "Release" CACHE STRING "Supported build types" FORCE)
 
-# IMPORTANT: use forward slashes
-set(OpenVINO_DIR "C:/Users/ser13/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/cmake")
-set(OpenVINOGenAI_DIR "C:/Users/ser13/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/cmake")
+# Portable OpenVINO discovery order:
+# 1) OPENVINO_GENAI_DIR env var (root folder containing setupvars.bat)
+# 2) USERPROFILE/Downloads default paths
+if(NOT DEFINED OpenVINO_DIR)
+    if(DEFINED ENV{OPENVINO_GENAI_DIR})
+        set(OpenVINO_DIR "$ENV{OPENVINO_GENAI_DIR}/runtime/cmake")
+    elseif(EXISTS "$ENV{USERPROFILE}/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/cmake")
+        set(OpenVINO_DIR "$ENV{USERPROFILE}/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/cmake")
+    elseif(EXISTS "$ENV{USERPROFILE}/Downloads/openvino_genai_windows_2025.4.1.0_x86_64/runtime/cmake")
+        set(OpenVINO_DIR "$ENV{USERPROFILE}/Downloads/openvino_genai_windows_2025.4.1.0_x86_64/runtime/cmake")
+    endif()
+endif()
+
+if(NOT DEFINED OpenVINOGenAI_DIR)
+    if(DEFINED ENV{OPENVINO_GENAI_DIR})
+        set(OpenVINOGenAI_DIR "$ENV{OPENVINO_GENAI_DIR}/runtime/cmake")
+    elseif(DEFINED OpenVINO_DIR)
+        set(OpenVINOGenAI_DIR "${OpenVINO_DIR}")
+    endif()
+endif()
+
 message(STATUS "OpenVINO_DIR = ${OpenVINO_DIR}")
+message(STATUS "OpenVINOGenAI_DIR = ${OpenVINOGenAI_DIR}")
 
 # Fetch header-only dependencies for REST API
 include(FetchContent)

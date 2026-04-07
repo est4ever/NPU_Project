@@ -1,5 +1,5 @@
 param(
-    [string]$ModelPath = "./models/Qwen2.5-0.5B-Instruct",
+    [string]$ModelPath = "",
     [string]$Device = "",
     [int]$ApiPort = 8000,
     [int]$AppPort = 5173,
@@ -11,6 +11,36 @@ param(
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptDir
+
+function Resolve-ModelPathFromRegistry {
+    param([string]$Fallback = "./models/Qwen2.5-0.5B-Instruct")
+
+    $modelsRegistry = Join-Path $scriptDir "registry\models_registry.json"
+    if (-not (Test-Path $modelsRegistry)) {
+        return $Fallback
+    }
+
+    try {
+        $reg = Get-Content -Path $modelsRegistry -Raw | ConvertFrom-Json
+        $selectedId = [string]$reg.selected_model
+        if ([string]::IsNullOrWhiteSpace($selectedId)) {
+            return $Fallback
+        }
+        foreach ($m in $reg.models) {
+            if ($m.id -eq $selectedId -and -not [string]::IsNullOrWhiteSpace([string]$m.path)) {
+                return [string]$m.path
+            }
+        }
+    } catch {
+        return $Fallback
+    }
+
+    return $Fallback
+}
+
+if ([string]::IsNullOrWhiteSpace($ModelPath)) {
+    $ModelPath = Resolve-ModelPathFromRegistry
+}
 
 function Test-TcpPort {
     param(
