@@ -86,6 +86,9 @@ private:
     // POST /v1/cli/model/select - Select active model (applies next restart)
     void handle_cli_model_select(const class httplib::Request& req, class httplib::Response& res);
 
+    // POST /v1/cli/model/rename - Change a registered model's id (path/format unchanged)
+    void handle_cli_model_rename(const class httplib::Request& req, class httplib::Response& res);
+
     // GET /v1/cli/backend/list - List registered backends and selected backend
     void handle_cli_backend_list(const class httplib::Request& req, class httplib::Response& res);
 

@@ -601,6 +601,10 @@ RestAPIServer::RestAPIServer(BackendPool* pool, RuntimeConfig* config, KVCacheMo
         handle_cli_model_select(req, res);
     });
 
+    server_->Post("/v1/cli/model/rename", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_cli_model_rename(req, res);
+    });
+
     server_->Get("/v1/cli/backend/list", [this](const httplib::Request& req, httplib::Response& res) {
         handle_cli_backend_list(req, res);
     });
@@ -641,6 +645,7 @@ void RestAPIServer::start() {
     std::cout << "  - GET  http://localhost:" << port_ << "/v1/cli/model/list\n";
     std::cout << "  - POST http://localhost:" << port_ << "/v1/cli/model/import\n";
     std::cout << "  - POST http://localhost:" << port_ << "/v1/cli/model/select\n";
+    std::cout << "  - POST http://localhost:" << port_ << "/v1/cli/model/rename\n";
     std::cout << "  - GET  http://localhost:" << port_ << "/v1/cli/backend/list\n";
     std::cout << "  - POST http://localhost:" << port_ << "/v1/cli/backend/add\n";
     std::cout << "  - POST http://localhost:" << port_ << "/v1/cli/backend/select\n";
