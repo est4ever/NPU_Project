@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "selected_backend": "openvino",
+  "backends": [
+    {
+      "id": "openvino",
+      "type": "builtin",
+      "entrypoint": "dist/npu_wrapper.exe",
+      "formats": ["openvino"],
+      "status": "ready"
+    }
+  ]
+}

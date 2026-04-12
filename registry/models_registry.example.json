@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "selected_model": "openvino-local",
+  "models": [
+    {
+      "id": "openvino-local",
+      "path": "./models/Qwen2.5-0.5B-Instruct",
+      "format": "openvino",
+      "backend": "openvino",
+      "status": "ready"
+    }
+  ]
+}

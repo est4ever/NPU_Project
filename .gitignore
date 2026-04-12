@@ -45,8 +45,15 @@ runlogs/
 # Runtime-generated metrics
 metrics.ndjson
 
+# Registry JSON is machine-specific (paths, selections). Commit only *.example.json templates.
+registry/*.json
+!registry/*.example.json
+
 # OpenWebUI runtime secret (auto-generated, do not commit)
 .webui_secret_key
+
+# Odd cache / probe blobs
+*.blob
 
 # GPU cache (large auto-generated inference cache)
 gpu_cache/

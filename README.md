@@ -1,8 +1,10 @@
-# NPU_Project — OpenVINO GenAI LLM C++ Wrapper (Windows)
+# Loomis — Unified orchestration for local AI runtimes
 
-A minimal C++ CLI wrapper that runs **OpenVINO GenAI LLMs** (OpenVINO-exported models) with device selection (CPU / GPU / NPU) and automatic fallback.
+Windows control plane and **OpenVINO GenAI** C++ wrapper (`npu_wrapper`): device selection (CPU / GPU / NPU), REST API, and the Loomis app shell. See `LICENSE` (MIT).
 
 > **Important:** This repo does **not** ship models. You export/download models locally into `models/`.
+
+> **Distribution / published builds:** What you ship to end users is typically the **wrapper, scripts, and app shell**—not model weights, not OpenVINO or other vendor runtimes, and not preconfigured backends. Users install their own stack, then register **models** and **backends** in the UI or JSON registries. Use **builtin** + **npu_wrapper** when targeting OpenVINO GenAI; use **external** for any other HTTP-compatible server you wire up.
 
 ## What This Project Does
 
@@ -674,7 +676,7 @@ This project now includes the following app-shell and local API reliability fixe
 **Backend manager (new):**
 - `backend list`
 - `backend add <id> <type> <entrypoint>`
-- `backend select <id>` (applies on next stack restart)
+- `backend select <id>` (updates registry; from the **app shell**, **Select Backend** also triggers an automatic API restart—see *Backends registry* above)
 
 **Examples:**
 ```powershell
@@ -690,11 +692,22 @@ This project now includes the following app-shell and local API reliability fixe
 .\npu_cli.ps1 -Command backend -Arguments "select","onnxruntime"
 ```
 
-Registries are persisted in:
+Registries are persisted locally in:
 - `registry/models_registry.json`
 - `registry/backends_registry.json`
 
+Those files are **not** in Git (they contain machine-specific paths). On a fresh clone, copy `registry/models_registry.example.json` → `models_registry.json` and `registry/backends_registry.example.json` → `backends_registry.json`, or run `.\portable_setup.ps1`, which creates them if missing.
+
 **Models registry and `npu_wrapper`:** `selected_model` should identify a folder on disk that contains **OpenVINO IR** (at least one `.xml` and its weights). Entries tagged `gguf` (or similar) are fine to keep for documentation or the Terminal Model Flow, but they will not load until you convert or export to IR and update `path`. If `selected_model` points at a non-IR folder, `.\start_app.ps1` may fall back to another registry path that has IR—fix the selection when you are ready so behavior matches intent.
+
+**Backends registry (add and switch):** Entries live in `registry/backends_registry.json`. Each row needs a unique **`id`**, **`type`**, and **`entrypoint`** (path to an executable or script, relative to the project root or absolute).
+
+- **`type: "builtin"`** — `run.ps1` loads OpenVINO `setupvars.bat` first, then runs **`entrypoint`**. Use this for **`npu_wrapper.exe`** (e.g. `dist/npu_wrapper.exe` or `build/Release/npu_wrapper.exe`).
+- **`type: "external"`** — `run.ps1` skips OpenVINO env setup and runs **`entrypoint`** with the same arguments as usual (model path, `--server`, `--port`, …). Use this only if that program is self-contained. For the **browser app shell** and **`npu_cli.ps1`** to keep working, the process should expose the same HTTP API as `npu_wrapper` (e.g. `/v1/chat/completions`, `/v1/cli/status`). A bare ONNX Runtime CLI will not satisfy that unless you wrap it.
+
+**Switching backends:** In the app shell, choose the backend and click **Select Backend**. That updates the registry and calls **`POST /v1/cli/backend/restart`**, which stops the current API process and starts **`run.ps1`** again; `run.ps1` reads **`selected_backend`** and launches the matching **`entrypoint`**. The first successful server start writes **`registry/npu_launch_state.json`** (gitignored); without it, restart from the UI will fail until you start the stack once via **`.\start_app.ps1`** or **`.\run.ps1 ... --server`**.
+
+**If `npu_cli` says it cannot connect:** The API on port **8000** is down or still restarting. Wait a few seconds after a model/backend switch, run **`.\start_app.ps1`**, or inspect the **PowerShell window** that is running `run.ps1` for missing `entrypoint`, bad path, or crash on load.
 
 7. **Runtime terminal commands (no restart needed)**
 
