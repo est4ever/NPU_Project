@@ -1,5 +1,12 @@
 #include "RestAPIServer.h"
 #include <httplib.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #include <nlohmann/json.hpp>
 #include <iostream>
 #include <sstream>
@@ -12,10 +19,30 @@
 #include <optional>
 #include <mutex>
 #include <thread>
+#include <vector>
 #include <openvino/openvino.hpp>
 #include "../OpenVINO/Backend/KVCacheMonitor.h"
 
 using json = nlohmann::json;
+
+void save_npu_launch_state(int argc, char** argv) {
+    try {
+        std::filesystem::create_directories("./registry");
+        json argv_json = json::array();
+        for (int i = 1; i < argc; ++i) {
+            argv_json.push_back(argv[i] ? std::string(argv[i]) : std::string());
+        }
+        char cwd_buf[MAX_PATH]{};
+        const DWORD n = GetCurrentDirectoryA(static_cast<DWORD>(sizeof(cwd_buf)), cwd_buf);
+        json doc = json::object();
+        doc["argv"] = argv_json;
+        doc["project_root"] = (n > 0 && n < sizeof(cwd_buf)) ? std::string(cwd_buf) : std::string(".");
+        doc["backend_pid"] = static_cast<int>(GetCurrentProcessId());
+        std::ofstream f("./registry/npu_launch_state.json");
+        f << doc.dump(2);
+    } catch (...) {
+    }
+}
 
 RestAPIServer::RestAPIServer(BackendPool* pool, int port)
     : RestAPIServer(pool, nullptr, port) {}
@@ -641,6 +668,10 @@ RestAPIServer::RestAPIServer(BackendPool* pool, RuntimeConfig* config, KVCacheMo
     server_->Post("/v1/cli/backend/select", [this](const httplib::Request& req, httplib::Response& res) {
         handle_cli_backend_select(req, res);
     });
+
+    server_->Post("/v1/cli/backend/restart", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_cli_backend_restart(req, res);
+    });
     
     server_->Options(".*", [](const httplib::Request&, httplib::Response& res) {
         res.status = 204; // No Content
@@ -674,6 +705,7 @@ void RestAPIServer::start() {
     std::cout << "  - GET  http://localhost:" << port_ << "/v1/cli/backend/list\n";
     std::cout << "  - POST http://localhost:" << port_ << "/v1/cli/backend/add\n";
     std::cout << "  - POST http://localhost:" << port_ << "/v1/cli/backend/select\n";
+    std::cout << "  - POST http://localhost:" << port_ << "/v1/cli/backend/restart\n";
     std::cout.flush();
     
     std::cout << "[RestAPI] Attempting to bind to 0.0.0.0:" << port_ << "...\n";
@@ -1740,7 +1772,7 @@ void RestAPIServer::handle_cli_backend_select(const httplib::Request& req, httpl
         set_json_response(res, json({
             {"success", true},
             {"selected_backend", id},
-            {"note", "Selection saved. Restart stack to apply backend change."}
+            {"note", "Selection saved. The app shell will call /v1/cli/backend/restart after this; or invoke that endpoint yourself to relaunch run.ps1 with the new entrypoint."}
         }));
     } catch (const json::exception& e) {
         set_error_response(
@@ -1756,6 +1788,81 @@ void RestAPIServer::handle_cli_backend_select(const httplib::Request& req, httpl
             500,
             "backend_select_failed",
             "Failed to select backend",
+            json{{"exception", e.what()}}
+        );
+    }
+}
+
+void RestAPIServer::handle_cli_backend_restart(const httplib::Request&, httplib::Response& res) {
+    try {
+        if (!std::filesystem::exists("./registry/npu_launch_state.json")) {
+            set_error_response(
+                res,
+                400,
+                "launch_state_missing",
+                "registry/npu_launch_state.json not found. Start the backend from run.ps1 / start_app.ps1 once, then try again."
+            );
+            return;
+        }
+        if (!std::filesystem::exists("./restart_backend.ps1")) {
+            set_error_response(
+                res,
+                500,
+                "restart_script_missing",
+                "restart_backend.ps1 not found in project root."
+            );
+            return;
+        }
+
+        char cwd_buf[MAX_PATH]{};
+        const DWORD n = GetCurrentDirectoryA(static_cast<DWORD>(sizeof(cwd_buf)), cwd_buf);
+        if (n == 0 || n >= sizeof(cwd_buf)) {
+            set_error_response(res, 500, "cwd_unavailable", "Could not read current directory");
+            return;
+        }
+        const std::string root(cwd_buf);
+        const std::string script = root + "\\restart_backend.ps1";
+
+        set_json_response(res, json({
+            {"success", true},
+            {"note", "Backend restart scheduled. This process will exit; run.ps1 will start again with the selected backend entrypoint."}
+        }));
+
+        std::thread([root, script]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(900));
+            std::string cmd =
+                "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + script + "\"";
+            STARTUPINFOA si{};
+            si.cb = sizeof(si);
+            PROCESS_INFORMATION pi{};
+            std::vector<char> cmdline(cmd.begin(), cmd.end());
+            cmdline.push_back('\0');
+            CreateProcessA(
+                nullptr,
+                cmdline.data(),
+                nullptr,
+                nullptr,
+                FALSE,
+                0,
+                nullptr,
+                root.c_str(),
+                &si,
+                &pi);
+            if (pi.hThread) {
+                CloseHandle(pi.hThread);
+            }
+            if (pi.hProcess) {
+                CloseHandle(pi.hProcess);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(400));
+            ExitProcess(0);
+        }).detach();
+    } catch (const std::exception& e) {
+        set_error_response(
+            res,
+            500,
+            "backend_restart_failed",
+            "Failed to schedule restart",
             json{{"exception", e.what()}}
         );
     }

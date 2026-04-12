@@ -7,6 +7,9 @@
 
 class KVCacheMonitor;
 
+// Persist argv + cwd + pid so the control plane can restart the same stack (see restart_backend.ps1).
+void save_npu_launch_state(int argc, char** argv);
+
 // Forward declarations to avoid including httplib in header
 namespace httplib {
     class Server;
@@ -97,4 +100,7 @@ private:
 
     // POST /v1/cli/backend/select - Select backend (applies next restart)
     void handle_cli_backend_select(const class httplib::Request& req, class httplib::Response& res);
+
+    // POST /v1/cli/backend/restart - Kill this process and relaunch via run.ps1 (same argv as last server start)
+    void handle_cli_backend_restart(const class httplib::Request& req, class httplib::Response& res);
 };

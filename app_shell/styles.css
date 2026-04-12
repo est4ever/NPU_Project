@@ -625,6 +625,33 @@ textarea {
   font-size: 0.78rem;
 }
 
+.mode-descriptions {
+  margin: 6px 0 10px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.mode-descriptions summary {
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.mode-descriptions .mode-details {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mode-descriptions .mode-item {
+  line-height: 1.45;
+}
+
+.registry-backend-help {
+  margin-bottom: 10px;
+}
+
 .flow-steps {
   margin: 8px 0;
   padding-left: 18px;

@@ -508,7 +508,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         ? `Loaded devices: ${loadedDevices.join(", ")}`
         : "Loaded devices: (none)";
       const availableText = availableDevices.length
-        ? ` | OpenVINO sees: ${availableDevices.join(", ")}`
+        ? ` | Runtime also reports: ${availableDevices.join(", ")}`
         : "";
       el("chatDeviceAvailability").textContent = `${loadedText}${availableText}`;
     }
@@ -553,10 +553,10 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     const modelSelect = el("chatModel");
     if (!modelSelect) return;
 
-    const preferred = selectedHint || statusCache?.selected_model || modelSelect.value || "openvino";
+    const preferred = selectedHint || statusCache?.selected_model || modelSelect.value || "local";
     const items = modelRegistryCache.length
       ? modelRegistryCache.map((m) => m.id)
-      : [preferred || "openvino"];
+      : [preferred || "local"];
 
     const deduped = [...new Set(items.filter(Boolean))];
     modelSelect.innerHTML = "";
@@ -1558,7 +1558,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     }
     
     if (!format) {
-      output.textContent = "Could not detect model format. Please specify (gguf, openvino, pytorch, etc).";
+      output.textContent = "Could not detect model format. Please specify (gguf, ir, onnx, pytorch, etc.).";
       return;
     }
 
@@ -1602,10 +1602,35 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         body: JSON.stringify({ id }),
       });
       printJson(output, result);
-      showRestartRequired(output);
-      addActivity(`Backend selected: ${id} (pending restart)`, "busy");
+      addActivity(`Backend selected: ${id} — restarting process...`, "busy");
       await refreshBackendRegistry();
-      await refreshStatus();
+
+      try {
+        const restartResult = await requestJson("/cli/backend/restart", {
+          method: "POST",
+          body: JSON.stringify({}),
+        });
+        appendText(output, `\n\n${restartResult.note || "Restart scheduled."}`);
+      } catch (restartErr) {
+        const rmsg = String(restartErr.message || restartErr);
+        if (/failed to fetch|network|load failed|aborted|fetch/i.test(rmsg)) {
+          appendText(
+            output,
+            "\n\nBackend is restarting (connection dropped). Wait a few seconds, then click Refresh Status."
+          );
+          addActivity("Backend restart in progress — reconnect shortly.", "busy");
+        } else {
+          appendText(output, `\n\nRestart failed: ${rmsg}`);
+          showRestartRequired(output);
+          addActivity(`Backend restart failed: ${rmsg}`, "error");
+        }
+      }
+
+      try {
+        await refreshStatus();
+      } catch (_) {
+        /* expected while process exits */
+      }
     } catch (err) {
       output.textContent = String(err.message || err);
       addActivity("Backend select failed", "error");
@@ -1629,7 +1654,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       setButtonBusy("addBackend", true, "Adding...");
       const result = await requestJson("/cli/backend/add", {
         method: "POST",
-        body: JSON.stringify({ id, type, entrypoint, formats: ["openvino"] }),
+        body: JSON.stringify({ id, type, entrypoint, formats: [] }),
       });
       printJson(output, result);
       addActivity(`Backend added: ${id}`, "ready");
@@ -1667,7 +1692,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       } catch (loadErr) {
         const lowered = String(loadErr.message || loadErr).toLowerCase();
         const extraHint = lowered.includes("gpu")
-          ? " | Hint: verify Intel GPU runtime/driver and try CPU/NPU fallback"
+          ? " | Hint: verify GPU runtime/driver for your stack and try another device if needed"
           : "";
         addActivity(
           `Could not load model on ${target}: ${String(loadErr.message || loadErr)}${extraHint}`,
@@ -1703,18 +1728,6 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     if (el("modelImportFormat")) el("modelImportFormat").value = format;
     buildTerminalCommand();
     addActivity(`Preset loaded: ${id}`, "ready");
-  }
-
-  function applyBackendPreset() {
-    const backend = String(el("terminalBackendPreset")?.value || "openvino").trim();
-    if (!backend) return;
-    if (el("backendAddId")) el("backendAddId").value = backend;
-    if (el("backendAddType")) el("backendAddType").value = "external";
-    if (el("backendAddEntrypoint")) {
-      el("backendAddEntrypoint").value = `./backends/${backend}/${backend}.exe`;
-    }
-    if (el("backendSelect")) el("backendSelect").value = backend;
-    addActivity(`Backend preset loaded: ${backend}`, "ready");
   }
 
   function buildTerminalCommand() {
@@ -1981,12 +1994,6 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       keywords: "registry backend select",
       action: () => selectBackend(),
     },
-    {
-      id: "apply-backend-preset",
-      label: "Apply Backend Preset",
-      keywords: "backend preset terminal",
-      action: () => applyBackendPreset(),
-    },
   ];
 
   function openCommandPalette() {
@@ -2241,7 +2248,6 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     on("thresholdInput", "input", validateThresholdInput);
     on("buildTerminalCommand", "click", buildTerminalCommand);
     on("copyTerminalCommand", "click", copyTerminalCommand);
-    on("applyBackendPreset", "click", applyBackendPreset);
     on("terminalModelRepo", "input", buildTerminalCommand);
     on("terminalModelId", "input", buildTerminalCommand);
     on("terminalModelFilename", "input", buildTerminalCommand);

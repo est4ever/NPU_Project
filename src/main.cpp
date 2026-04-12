@@ -920,6 +920,7 @@ int main(int argc, char** argv) {
                 server_config.set_enable_kv_paging(enable_kv_paging);
                 server_config.set_prefill_threshold_high(prefill_threshold_high);
 
+                save_npu_launch_state(argc, argv);
                 RestAPIServer api_server(&pool, &server_config, &kv_monitor, server_port);
                 
                 // Start server in a separate thread with exception handling
@@ -1206,6 +1207,7 @@ int main(int argc, char** argv) {
                 server_config.prefill_device = prefill_device;
                 server_config.decode_device = decode_device;
 
+                save_npu_launch_state(argc, argv);
                 RestAPIServer api_server(&pool, &server_config, &kv_monitor, server_port);
                 
                 // Start server in a separate thread with exception handling

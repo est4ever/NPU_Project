@@ -9,8 +9,8 @@
 <body>
   <header class="app-header glass">
     <div>
-      <h1>Loomis <span class="greeting">— Hey, Loomis</span></h1>
-      <p class="subhead">Local AI control plane for OpenVINO runtime.</p>
+      <h1>Loomis <span class="greeting">— Local AI, accelerated.</span></h1>
+      <p class="subhead">Local inference control plane. No models or backends are bundled—add what you use.</p>
     </div>
 
     <div class="header-tools">
@@ -93,7 +93,7 @@
       </div>
       <!-- hidden stubs kept for JS compatibility -->
       <input id="chatRequestedDevice" type="hidden" value="AUTO" />
-      <input id="chatModel"          type="hidden" value="openvino" />
+      <input id="chatModel"          type="hidden" value="local" />
       <input id="chatDeviceTarget"   type="hidden" value="AUTO" />
       <input id="contextWindow"      type="hidden" value="2048" />
     </section>
@@ -215,7 +215,27 @@
         <button id="refreshModels" class="ghost">Refresh Models</button>
         <button id="refreshBackends" class="ghost">Refresh Backends</button>
       </div>
-      <p class="hint">Backends are not preinstalled. Install the backend runtime locally first, then register it here with a unique ID, type, and executable path.</p>
+      <p class="hint">Nothing is preinstalled. Install whichever runtime you want (or use the built-in wrapper), then register it here with a unique ID, type, and executable path.</p>
+      <details class="mode-descriptions registry-backend-help">
+        <summary>How backends work (add and switch)</summary>
+        <div class="mode-details">
+          <div class="mode-item">
+            <strong>Ships empty:</strong> downloads do not include model weights or third-party inference engines. You choose the stack; this UI only stores paths in <code>registry/backends_registry.json</code>. Each row needs a unique <strong>id</strong>, <strong>type</strong>, and <strong>entrypoint</strong> (relative to the project root or absolute).
+          </div>
+          <div class="mode-item">
+            <strong>type: builtin</strong> — Use this for the included <strong>npu_wrapper</strong> build (OpenVINO GenAI). <code>run.ps1</code> loads Intel OpenVINO <code>setupvars.bat</code>, then runs <strong>entrypoint</strong> (for example <code>dist/npu_wrapper.exe</code> or <code>build/Release/npu_wrapper.exe</code>). Skip this type if you are not using that stack.
+          </div>
+          <div class="mode-item">
+            <strong>type: external</strong> — <code>run.ps1</code> does not load OpenVINO setup; it runs <strong>entrypoint</strong> with the usual arguments (model path, <code>--server</code>, <code>--port</code>, …). Use any self-contained server you install. For this UI and <code>npu_cli.ps1</code> to work unchanged, that process should expose the same HTTP API as <code>npu_wrapper</code> (for example <code>/v1/chat/completions</code>, <code>/v1/cli/status</code>). A bare CLI will not satisfy that unless you wrap it.
+          </div>
+          <div class="mode-item">
+            <strong>Select Backend</strong> updates the registry and triggers an API restart: the current server exits and <code>run.ps1</code> starts again with the new <strong>entrypoint</strong>. The first successful server start writes <code>registry/npu_launch_state.json</code> (local, not in git); without it, restart from the browser fails until you start the stack once via <code>start_app.ps1</code> or <code>run.ps1 ... --server</code>.
+          </div>
+          <div class="mode-item">
+            <strong>If chat or status fails to connect:</strong> nothing may be listening on port 8000 yet, or the API is still restarting after a model/backend switch. Wait a few seconds, click <strong>Refresh Status</strong>, run <code>start_app.ps1</code>, or check the PowerShell window running <code>run.ps1</code> for a bad entrypoint, crash on load, or wrong port.
+          </div>
+        </div>
+      </details>
       <div id="registryList" class="registry-list"></div>
       <div id="registryDetail" class="registry-detail-card"></div>
       <details class="raw-toggle">
@@ -229,11 +249,11 @@
           <select id="modelSelect"></select>
           <button id="selectModel">Select Model</button>
         </div>
-        <p class="hint"><strong>Import a Model:</strong> <strong>Inference</strong> uses OpenVINO GenAI: the <strong>selected</strong> entry must point at a folder that contains OpenVINO IR (a <code>.xml</code> plus weights). You can still register <code>gguf</code> or other formats as a record of HF downloads—select an OpenVINO IR model before restart to actually run chat. To change only the registry ID, use <strong>Rename ID</strong> on the detail card.</p>
+        <p class="hint"><strong>Import a Model:</strong> Registry rows are just paths on disk. If your <strong>selected backend</strong> is the built-in <strong>npu_wrapper</strong> (OpenVINO GenAI), the <strong>selected</strong> model folder must contain OpenVINO IR (a <code>.xml</code> plus weights) for chat to run. If you use an <strong>external</strong> backend, follow <em>that</em> engine’s format requirements instead. You can still register <code>gguf</code> or other files as documentation of HF downloads. To change only the registry ID, use <strong>Rename ID</strong> on the detail card.</p>
         <div class="row">
           <input id="modelImportId" type="text" placeholder="e.g., gemma-4-e4b-it-gguf" />
           <input id="modelImportPath" type="text" placeholder="e.g., ./models/gemma-4-e4b-it-gguf/model-4b-q4.gguf" />
-          <input id="modelImportFormat" type="text" placeholder="gguf, openvino, pytorch, etc." />
+          <input id="modelImportFormat" type="text" placeholder="gguf, ir, onnx, etc." />
           <button id="importModel">Import Model</button>
         </div>
 
@@ -242,6 +262,7 @@
           <button id="selectBackend">Select Backend</button>
           <button id="openBackendWizard" class="ghost" type="button">Add Backend Wizard</button>
         </div>
+        <p class="hint"><strong>Select Backend</strong> saves your choice and <strong>restarts the API</strong> (brief disconnect). Use <strong>Refresh Status</strong> when the server is back. Full details: expand <strong>How backends work</strong> in Registry Explorer above.</p>
 
         <div class="row">
           <input id="backendAddId" type="text" placeholder="backend id" />
@@ -276,14 +297,14 @@
         <li>Go to <a href="https://huggingface.co/models" target="_blank" rel="noreferrer">huggingface.co/models</a> and choose a model you want.</li>
         <li>Enter the repository path and a local model ID below, then click Build Command.</li>
         <li>Run the generated terminal command to download the model files locally.</li>
-        <li>Make sure you also install a backend runtime locally (OpenVINO, llama.cpp, vLLM, etc.).</li>
+        <li>Install whatever backend you plan to use (built-in wrapper + OpenVINO GenAI, llama.cpp, vLLM, your own server, etc.).</li>
         <li>In Registry Explorer, import/select the model and add/select the backend.</li>
       </ol>
 
       <div class="hint">Use a repo path such as <code>unsloth/gemma-4-E4B-it-GGUF</code> or another GGUF-compatible model. Your model must be downloaded locally before registry import.</div>
       <div class="hint">To avoid downloading all repo versions, specify a single filename (e.g., <code>model-v1-4b-q4.gguf</code>). Leave blank to download everything.</div>
       <div class="hint"><strong>Where to find the filename:</strong> Go to <a href="https://huggingface.co/models" target="_blank" rel="noreferrer">huggingface.co</a>, browse to your model repo, then click the <strong>Files and versions</strong> tab. Look for a <code>.gguf</code> file (like <code>model-4b-q4.gguf</code>) and copy its exact name.</div>
-      <div class="hint">Install the backend runtime first, then use the Add Backend Wizard to register it. Selecting a backend here only pre-fills the form.</div>
+      <div class="hint">Install the backend you want, then register it in <strong>Registry Explorer</strong> (Add Backend Wizard or manual fields under Registry Actions).</div>
 
       <div class="row">
         <label>HF Repo <input id="terminalModelRepo" type="text" value="unsloth/gemma-4-E4B-it-GGUF" placeholder="owner/model-name" /></label>
@@ -293,18 +314,6 @@
       <div class="row">
         <label>Filename (optional) <input id="terminalModelFilename" type="text" placeholder="model-4b-q4.gguf (leave blank for all files)" /></label>
       </div>
-
-      <div class="row">
-        <label>Default Backend
-          <select id="terminalBackendPreset">
-            <option value="openvino" selected>OpenVINO</option>
-            <option value="llamacpp">llama.cpp</option>
-            <option value="vllm">vLLM</option>
-          </select>
-        </label>
-        <button id="applyBackendPreset" type="button" class="ghost">Populate Backend Fields</button>
-      </div>
-      <p class="hint">This button only fills the backend form fields. After that, use Add Backend or Select Backend in Registry Explorer.</p>
 
       <div class="row">
         <button id="buildTerminalCommand" type="button" class="ghost">Build Command</button>

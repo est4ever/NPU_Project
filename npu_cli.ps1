@@ -45,6 +45,21 @@ function Get-ApiErrorMessage {
     return "$Exception"
 }
 
+function Test-ConnectionFailure {
+    param($Exception)
+    $t = "$Exception"
+    if ($Exception.Exception -and $Exception.Exception.Message) {
+        $t += " " + $Exception.Exception.Message
+    }
+    return $t -match '(?i)unable to connect|actively refused|connection refused|timed out|no connection|could not establish|target machine|remote name|name could not be resolved'
+}
+
+function Write-BackendUnreachableHint {
+    Write-Dim "  Hint: Nothing is listening at $ApiBase (or it is still starting). If you switched model/backend"
+    Write-Dim "  in the browser, wait ~5–10s and try again. Otherwise run .\start_app.ps1 or check the PowerShell"
+    Write-Dim "  window running run.ps1 for errors (bad entrypoint, crash on load, or wrong port)."
+}
+
 function Get-ScriptDir {
     if ($PSScriptRoot) { return $PSScriptRoot }
     if ($MyInvocation -and $MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) {
@@ -344,6 +359,10 @@ function Send-ChatMessage {
         Write-Host $content
     } catch {
         Write-Err (Get-ApiErrorMessage -Exception $_)
+        if (Test-ConnectionFailure -Exception $_) {
+            Write-Host ""
+            Write-BackendUnreachableHint
+        }
         Write-Host ""
         return
     }
@@ -373,7 +392,10 @@ function Handle-InlineCommand {
                 Write-Info ""
                 Write-Dim  "  Change device / policy / model at http://localhost:5173"
                 Write-Info ""
-            } catch { Write-Err "Could not reach backend." }
+            } catch {
+                Write-Err "Could not reach backend."
+                Write-BackendUnreachableHint
+            }
             return $true
         }
         default { return $false }
