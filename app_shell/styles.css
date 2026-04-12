@@ -577,8 +577,24 @@ textarea {
 
 .status-badge.error {
   color: var(--bad);
-  border-color: color-mix(in srgb, var(--bad) 45%, white);
-  background: color-mix(in srgb, var(--bad) 12%, white);
+  border-color: color-mix(in srgb, var(--bad) 45%, white);  background: color-mix(in srgb, var(--bad) 12%, white);
+}
+
+.status-indicator {
+  font-size: 0.9em;
+  padding: 4px 8px;
+  border-radius: 4px;
+  display: inline-block;
+  min-height: 1.2em;
+}
+
+.status-indicator.success {
+  color: var(--good);
+  background: color-mix(in srgb, var(--good) 15%, white);
+}
+
+.status-indicator.error {
+  color: var(--bad);  background: color-mix(in srgb, var(--bad) 12%, white);
 }
 
 .toggle-grid {
@@ -586,6 +602,21 @@ textarea {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 8px;
+}
+
+.feature-confirmation {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--ok) 10%, white);
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.feature-confirmation.error {
+  background: color-mix(in srgb, var(--bad) 10%, white);
+  color: var(--text);
 }
 
 .hint {
@@ -819,6 +850,34 @@ textarea {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.registry-rename-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.registry-rename-label {
+  flex: 1 1 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.registry-rename-input {
+  width: 100%;
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
 }
 
 .greeting {
