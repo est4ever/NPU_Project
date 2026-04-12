@@ -12,34 +12,158 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptDir
 
-function Resolve-ModelPathFromRegistry {
-    param([string]$Fallback = "./models/Qwen2.5-0.5B-Instruct")
+function Normalize-ModelPathString {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $Path }
+    $t = $Path.Trim()
+    while ($t.Length -ge 2 -and (
+            ($t.StartsWith([char]34) -and $t.EndsWith([char]34)) -or
+            ($t.StartsWith([char]39) -and $t.EndsWith([char]39))
+        )) {
+        $t = $t.Substring(1, $t.Length - 2).Trim()
+    }
+    return $t
+}
+
+function Get-RegistrySelectedModel {
+    param([string]$FallbackPath = "./models/Qwen2.5-0.5B-Instruct")
+
+    $result = [ordered]@{
+        Path         = $FallbackPath
+        Format       = "openvino"
+        Id           = ""
+        FromRegistry = $false
+    }
 
     $modelsRegistry = Join-Path $scriptDir "registry\models_registry.json"
     if (-not (Test-Path $modelsRegistry)) {
-        return $Fallback
+        return $result
     }
 
     try {
         $reg = Get-Content -Path $modelsRegistry -Raw | ConvertFrom-Json
         $selectedId = [string]$reg.selected_model
         if ([string]::IsNullOrWhiteSpace($selectedId)) {
-            return $Fallback
+            return $result
         }
         foreach ($m in $reg.models) {
             if ($m.id -eq $selectedId -and -not [string]::IsNullOrWhiteSpace([string]$m.path)) {
-                return [string]$m.path
+                $result.Path = Normalize-ModelPathString ([string]$m.path)
+                $result.Format = if ($m.format) { [string]$m.format } else { "openvino" }
+                $result.Id = $selectedId
+                $result.FromRegistry = $true
+                return $result
             }
         }
     } catch {
-        return $Fallback
+        return $result
     }
 
-    return $Fallback
+    return $result
 }
 
+function Resolve-FullModelDirectory {
+    param(
+        [string]$ModelPath,
+        [string]$ProjectRoot
+    )
+    $p = Normalize-ModelPathString $ModelPath
+    if ([string]::IsNullOrWhiteSpace($p)) { return $null }
+    if ([System.IO.Path]::IsPathRooted($p)) {
+        return [System.IO.Path]::GetFullPath($p)
+    }
+    $rel = $p -replace '^\.[\\/]', ''
+    return [System.IO.Path]::GetFullPath((Join-Path $ProjectRoot $rel))
+}
+
+function Test-DirHasOpenVINOIr {
+    param([string]$FullPath)
+    if ([string]::IsNullOrWhiteSpace($FullPath)) { return $false }
+    if (-not (Test-Path -LiteralPath $FullPath -PathType Container)) { return $false }
+    $xml = Get-ChildItem -LiteralPath $FullPath -Filter "*.xml" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    return [bool]$xml
+}
+
+function Get-OpenVinoRunnableCandidates {
+    param(
+        [string]$ProjectRoot,
+        [string]$PreferPath
+    )
+    $list = New-Object System.Collections.Generic.List[string]
+    $seen = @{}
+
+    $add = {
+        param([string]$p)
+        $n = Normalize-ModelPathString $p
+        if ([string]::IsNullOrWhiteSpace($n)) { return }
+        if ($seen.ContainsKey($n)) { return }
+        $seen[$n] = $true
+        [void]$list.Add($n)
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($PreferPath)) {
+        & $add $PreferPath
+    }
+
+    try {
+        $regPath = Join-Path $ProjectRoot "registry\models_registry.json"
+        if (Test-Path -LiteralPath $regPath) {
+            $reg = Get-Content -LiteralPath $regPath -Raw | ConvertFrom-Json
+            foreach ($m in $reg.models) {
+                if ($m.path) { & $add ([string]$m.path) }
+            }
+        }
+    } catch {}
+
+    & $add "./models/Qwen2.5-0.5B-Instruct"
+    return ,$list.ToArray()
+}
+
+$registryPick = Get-RegistrySelectedModel
+
 if ([string]::IsNullOrWhiteSpace($ModelPath)) {
-    $ModelPath = Resolve-ModelPathFromRegistry
+    $ModelPath = $registryPick.Path
+}
+
+$ModelPath = Normalize-ModelPathString $ModelPath
+
+$modelDirFull = Resolve-FullModelDirectory -ModelPath $ModelPath -ProjectRoot $scriptDir
+$dirExists = $modelDirFull -and (Test-Path -LiteralPath $modelDirFull -PathType Container)
+$hasIr = $dirExists -and (Test-DirHasOpenVINOIr -FullPath $modelDirFull)
+
+if (-not $hasIr) {
+    $fallback = $null
+    foreach ($rel in (Get-OpenVinoRunnableCandidates -ProjectRoot $scriptDir -PreferPath $ModelPath)) {
+        $full = Resolve-FullModelDirectory -ModelPath $rel -ProjectRoot $scriptDir
+        if (Test-DirHasOpenVINOIr -FullPath $full) {
+            $fallback = @{ Relative = $rel; Full = $full }
+            break
+        }
+    }
+
+    if ($fallback) {
+        if ($dirExists -and -not (Test-DirHasOpenVINOIr -FullPath $modelDirFull)) {
+            Write-Host "[App] Registry path has no OpenVINO IR (.xml): $ModelPath" -ForegroundColor Yellow
+            if ($registryPick.Format -match "^(?i)gguf$") {
+                Write-Host "      (GGUF folders are not valid for npu_wrapper; GenAI needs exported IR.)" -ForegroundColor DarkYellow
+            }
+        } elseif (-not $dirExists) {
+            Write-Host "[App] Model directory missing: $modelDirFull" -ForegroundColor Yellow
+        }
+        Write-Host "[App] Starting with runnable OpenVINO model instead: $($fallback.Relative)" -ForegroundColor Cyan
+        Write-Host "      Update selected_model in registry\models_registry.json when you have an IR build." -ForegroundColor DarkGray
+        $ModelPath = $fallback.Relative
+        $modelDirFull = $fallback.Full
+    } else {
+        if (-not $dirExists) {
+            throw "[App] Model directory not found:`n  $modelDirFull`n  (ModelPath was '$ModelPath')`n`nNo other registry path contained OpenVINO IR either. Add a model folder with a .xml (IR) under ./models/ or fix registry paths."
+        }
+        $ggufNote = ""
+        if ($registryPick.Format -match "^(?i)gguf$") {
+            $ggufNote = "`n`nThe selected registry entry is GGUF-only. npu_wrapper needs OpenVINO IR (openvino_model.xml + weights), not .gguf files."
+        }
+        throw "[App] No OpenVINO IR (.xml) found anywhere we tried (selected path + other registry entries + ./models/Qwen2.5-0.5B-Instruct).`n  Checked folder: $modelDirFull$ggufNote`n`nDownload or convert an OpenVINO IR model into ./models/... and register it. See README: 'Could not find a model in the directory'."
+    }
 }
 
 function Test-TcpPort {

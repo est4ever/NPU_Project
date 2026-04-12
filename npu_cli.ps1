@@ -138,13 +138,22 @@ function Download-Model {
 
     if (Test-Path (Join-Path $target ".git")) {
         Push-Location $target
-        git pull
-        Pop-Location
+        try {
+            git pull
+            if ($LASTEXITCODE -ne 0) {
+                throw "git pull failed with exit code $LASTEXITCODE"
+            }
+        } finally {
+            Pop-Location
+        }
     } else {
         if (Test-Path $target) {
             Remove-Item -Recurse -Force $target
         }
         git clone "https://huggingface.co/$Repo" $target
+        if ($LASTEXITCODE -ne 0) {
+            throw "git clone failed with exit code $LASTEXITCODE"
+        }
     }
 
     return $ModelId

@@ -157,6 +157,9 @@ function Download-Model {
     $hfCli = Get-Command huggingface-cli -ErrorAction SilentlyContinue
     if ($hfCli) {
         & huggingface-cli download $Repo --local-dir $target --local-dir-use-symlinks False | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "huggingface-cli download failed with exit code $LASTEXITCODE"
+        }
         return $ModelId
     }
 
@@ -167,13 +170,22 @@ function Download-Model {
 
     if (Test-Path (Join-Path $target ".git")) {
         Push-Location $target
-        git pull | Out-Host
-        Pop-Location
+        try {
+            git pull | Out-Host
+            if ($LASTEXITCODE -ne 0) {
+                throw "git pull failed with exit code $LASTEXITCODE"
+            }
+        } finally {
+            Pop-Location
+        }
     } else {
         if (Test-Path $target) {
             Remove-Item -Recurse -Force $target
         }
         git clone "https://huggingface.co/$Repo" $target | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "git clone failed with exit code $LASTEXITCODE"
+        }
     }
 
     return $ModelId

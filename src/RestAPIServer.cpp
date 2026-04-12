@@ -209,6 +209,31 @@ std::string to_lower_copy(const std::string& s) {
     return out;
 }
 
+std::string registry_model_format(const json& models, const std::string& id) {
+    for (const auto& item : models) {
+        if (!item.is_object()) {
+            continue;
+        }
+        if (item.value("id", "") != id) {
+            continue;
+        }
+        return to_lower_copy(trim_copy(item.value("format", "")));
+    }
+    return "";
+}
+
+// Human-facing hint when registry format will not load in npu_wrapper (OpenVINO GenAI / IR).
+std::string npu_wrapper_format_warning(const std::string& format_lower) {
+    if (format_lower == "gguf") {
+        return "GGUF is not loadable by npu_wrapper. Keep this entry to track downloads; "
+               "select a model whose folder contains OpenVINO IR (.xml). Convert or use a packaged IR model to run inference.";
+    }
+    if (format_lower == "pytorch" || format_lower == "pt" || format_lower == "safetensors" || format_lower == "hf") {
+        return "This format is not loaded directly by npu_wrapper. Export to OpenVINO IR and point path at that folder to run inference.";
+    }
+    return {};
+}
+
 bool starts_with(const std::string& s, const std::string& prefix) {
     return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
 }
@@ -1447,12 +1472,20 @@ void RestAPIServer::handle_cli_model_import(const httplib::Request& req, httplib
         }
 
         save_registry(kModelsRegistryPath, models_reg);
-        set_json_response(res, json({
+
+        json body_out = {
             {"success", true},
             {"updated", updated},
             {"id", id},
+            {"format", format},
             {"note", "Model registered. Restart stack to load a newly selected model."}
-        }));
+        };
+        const std::string fmt_warn = npu_wrapper_format_warning(format);
+        if (!fmt_warn.empty()) {
+            body_out["warning"] = fmt_warn;
+        }
+
+        set_json_response(res, body_out);
     } catch (const json::exception& e) {
         set_error_response(
             res,
@@ -1489,11 +1522,20 @@ void RestAPIServer::handle_cli_model_select(const httplib::Request& req, httplib
 
         models_reg["selected_model"] = id;
         save_registry(kModelsRegistryPath, models_reg);
-        set_json_response(res, json({
+
+        const std::string fmt = registry_model_format(models_reg["models"], id);
+        json body_out = {
             {"success", true},
             {"selected_model", id},
+            {"format", fmt},
             {"note", "Selection saved. Restart stack to apply model change."}
-        }));
+        };
+        const std::string fmt_warn = npu_wrapper_format_warning(fmt);
+        if (!fmt_warn.empty()) {
+            body_out["warning"] = fmt_warn;
+        }
+
+        set_json_response(res, body_out);
     } catch (const json::exception& e) {
         set_error_response(
             res,
@@ -1508,6 +1550,87 @@ void RestAPIServer::handle_cli_model_select(const httplib::Request& req, httplib
             500,
             "model_select_failed",
             "Failed to select model",
+            json{{"exception", e.what()}}
+        );
+    }
+}
+
+void RestAPIServer::handle_cli_model_rename(const httplib::Request& req, httplib::Response& res) {
+    try {
+        json body = json::parse(req.body);
+        const std::string from_id = trim_copy(body.value("from_id", ""));
+        const std::string to_id = trim_copy(body.value("to_id", ""));
+
+        if (from_id.empty() || to_id.empty()) {
+            set_error_response(
+                res,
+                400,
+                "missing_required_fields",
+                "from_id and to_id are required",
+                json{{"required", json::array({"from_id", "to_id"})}}
+            );
+            return;
+        }
+
+        if (from_id == to_id) {
+            set_json_response(res, json({
+                {"success", true},
+                {"from_id", from_id},
+                {"to_id", to_id},
+                {"unchanged", true},
+                {"note", "New id matches current id."}
+            }));
+            return;
+        }
+
+        json models_reg = load_models_registry();
+        if (!has_registry_item(models_reg["models"], from_id)) {
+            set_error_response(res, 404, "model_not_found", "Model not found: " + from_id);
+            return;
+        }
+        if (has_registry_item(models_reg["models"], to_id)) {
+            set_error_response(
+                res,
+                409,
+                "id_already_exists",
+                "A model with this id already exists: " + to_id
+            );
+            return;
+        }
+
+        for (auto& item : models_reg["models"]) {
+            if (item.value("id", "") == from_id) {
+                item["id"] = to_id;
+                break;
+            }
+        }
+
+        if (models_reg.contains("selected_model") && models_reg["selected_model"].get<std::string>() == from_id) {
+            models_reg["selected_model"] = to_id;
+        }
+
+        save_registry(kModelsRegistryPath, models_reg);
+        set_json_response(res, json({
+            {"success", true},
+            {"from_id", from_id},
+            {"to_id", to_id},
+            {"selected_model", models_reg.value("selected_model", "")},
+            {"note", "Model id updated. Restart stack if this model is loaded."}
+        }));
+    } catch (const json::exception& e) {
+        set_error_response(
+            res,
+            400,
+            "invalid_json",
+            "Invalid JSON in request body",
+            json{{"exception", e.what()}}
+        );
+    } catch (const std::exception& e) {
+        set_error_response(
+            res,
+            500,
+            "model_rename_failed",
+            "Failed to rename model",
             json{{"exception", e.what()}}
         );
     }

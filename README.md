@@ -694,6 +694,8 @@ Registries are persisted in:
 - `registry/models_registry.json`
 - `registry/backends_registry.json`
 
+**Models registry and `npu_wrapper`:** `selected_model` should identify a folder on disk that contains **OpenVINO IR** (at least one `.xml` and its weights). Entries tagged `gguf` (or similar) are fine to keep for documentation or the Terminal Model Flow, but they will not load until you convert or export to IR and update `path`. If `selected_model` points at a non-IR folder, `.\start_app.ps1` may fall back to another registry path that has IR—fix the selection when you are ready so behavior matches intent.
+
 7. **Runtime terminal commands (no restart needed)**
 
 **Available in ALL startup modes (single-device, benchmark, and speculative):**

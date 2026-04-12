@@ -42,6 +42,26 @@ static void logline(const std::string& s) {
     f << s << std::endl;
 }
 
+// Strip one layer of wrapping quotes (common when paths are copy-pasted into JSON or shells).
+static std::string strip_wrapping_quotes(std::string s) {
+    while (s.size() >= 2) {
+        const char a = s.front();
+        const char b = s.back();
+        if ((a == '"' && b == '"') || (a == '\'' && b == '\'')) {
+            s = s.substr(1, s.size() - 2);
+            continue;
+        }
+        break;
+    }
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front())) != 0) {
+        s.erase(s.begin());
+    }
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())) != 0) {
+        s.pop_back();
+    }
+    return s;
+}
+
 // Forward declarations for argument parsing functions
 static bool parse_int_arg(int argc, char** argv, const std::string& flag, int& out);
 static bool parse_double_arg(int argc, char** argv, const std::string& flag, double& out);
@@ -184,6 +204,16 @@ static bool has_server_flag(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--server") {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool has_preload_all_devices_flag(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--preload-all-devices") {
             return true;
         }
     }
@@ -588,6 +618,7 @@ int main(int argc, char** argv) {
         std::cerr << "  --json                                        Emit NDJSON metrics to stderr\n";
         std::cerr << "  --server                                      Start OpenAI-compatible REST API server\n";
         std::cerr << "  --port N                                      Server port (default: 8080)\n";
+        std::cerr << "  --preload-all-devices                         Load model on all devices at startup (slower startup, instant switching)\n";
         std::cerr << "  --context-routing                             Enable context-aware device routing\n";
         std::cerr << "  --optimize-memory                             Enable INT8 KV-cache quantization (50-75% RAM savings)\n";
         std::cerr << "  --split-prefill                               Route long prompts to best TTFT device\n";
@@ -625,7 +656,7 @@ int main(int argc, char** argv) {
     double min_accept = 0.55;
     bool spec_disable_on_low_accept = has_spec_disable_on_low_accept_flag(argc, argv);
 
-    std::string model_dir = argv[1];
+    std::string model_dir = strip_wrapping_quotes(argv[1]);
     std::string model_name = std::filesystem::path(model_dir).filename().string();
     std::string draft_model_dir;
     std::string draft_device;
@@ -634,6 +665,7 @@ int main(int argc, char** argv) {
         std::cerr << "Error: --draft-model requires a value\n";
         return 1;
     }
+    draft_model_dir = strip_wrapping_quotes(draft_model_dir);
     if (!parse_string_arg(argc, argv, "--draft-device", draft_device)) {
         std::cerr << "Error: --draft-device requires a value\n";
         return 1;
@@ -698,6 +730,9 @@ int main(int argc, char** argv) {
     // Check for server mode
     bool server_mode = has_server_flag(argc, argv);
     int server_port = parse_server_port(argc, argv);
+    
+    // Check for preload all devices flag (server mode only)
+    bool preload_all_devices = has_preload_all_devices_flag(argc, argv);
     
     // Check for KV-cache monitoring features
     bool enable_kv_paging = has_kv_paging_flag(argc, argv);
@@ -1123,14 +1158,24 @@ int main(int argc, char** argv) {
                               << ", Threshold: " << prefill_threshold_high
                               << " (low: " << prefill_threshold_low << ") tokens\n";
                 } else if (server_mode) {
-                    // In server mode load all hardware devices so the UI can switch at runtime.
-                    // Policy determines initial active device; all discovered hardware is pre-loaded.
-                    std::vector<std::string> all_hw;
-                    for (const auto& d : scheduler.discover_devices()) {
-                        if (d == "CPU" || d == "GPU" || d == "NPU") all_hw.push_back(d);
+                    // In server mode, load only the primary device by default for faster startup.
+                    // Use --preload-all-devices to load on all available devices for instant switching.
+                    std::vector<std::string> devices_to_load;
+                    if (preload_all_devices) {
+                        // Load on all hardware devices (legacy behavior)
+                        std::vector<std::string> all_hw;
+                        for (const auto& d : scheduler.discover_devices()) {
+                            if (d == "CPU" || d == "GPU" || d == "NPU") all_hw.push_back(d);
+                        }
+                        if (all_hw.empty()) all_hw.push_back(device);
+                        devices_to_load = all_hw;
+                        std::cout << "[Server Mode] Preloading on all devices (use --preload-all-devices=false for faster startup)\n";
+                    } else {
+                        // Load only on primary device (new default behavior)
+                        devices_to_load = {device};
+                        std::cout << "[Server Mode] Loading on primary device only (use --preload-all-devices for all devices)\n";
                     }
-                    if (all_hw.empty()) all_hw.push_back(device);
-                    pool.load_on_devices(model_dir, all_hw);
+                    pool.load_on_devices(model_dir, devices_to_load);
                     pool.set_active_device(device);
                     std::cout << "[Server Mode] Loaded " << pool.get_loaded_devices().size()
                               << " device(s). Active: " << pool.get_active_device() << "\n" << std::flush;

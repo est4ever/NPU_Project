@@ -31,13 +31,13 @@
     <span class="readiness-chip" id="rBackend">backend: -</span>
     <span class="readiness-chip" id="rDevices">loaded: -</span>
     <span class="readiness-chip" id="rSplitPrefill">split-prefill: -</span>
+    <span class="readiness-chip" id="rContextRouting">context-routing: -</span>
+    <span class="readiness-chip" id="rOptimizeMemory">optimize-memory: -</span>
   </div>
-
   <nav class="workspace-tabs" aria-label="Primary Views">
     <button id="tabWorkspace" class="ghost active" type="button">Workspace</button>
     <button id="tabControl" class="ghost" type="button">Control</button>
   </nav>
-
   <main class="layout-bento">
     <section class="panel glass workspace-only" id="chatPanel">
       <div class="panel-head">
@@ -56,6 +56,20 @@
         <p>Chat runs in the terminal.</p>
         <pre class="inline-cmd">.\npu_cli.ps1</pre>
         <p class="hint">Metrics (device, TTFT, TPOT, latency, RAM) print after each response.</p>
+        <details class="mode-descriptions">
+          <summary>Performance Mode Descriptions</summary>
+          <div class="mode-details">
+            <div class="mode-item">
+              <strong>BALANCED</strong>: Automatically selects the best available device (GPU → NPU → CPU) for optimal performance while maintaining reasonable power usage.
+            </div>
+            <div class="mode-item">
+              <strong>PERFORMANCE</strong>: Prioritizes speed by preferring GPU when available, maximizing inference throughput for demanding tasks.
+            </div>
+            <div class="mode-item">
+              <strong>BATTERY_SAVER</strong>: Optimizes for efficiency by preferring NPU (Neural Processing Unit) to minimize power consumption and heat generation.
+            </div>
+          </div>
+        </details>
       </div>
       <!-- device + policy controls -->
       <div class="row">
@@ -146,32 +160,29 @@
       </details>
 
       <div class="row">
-        <label>Device
-          <select id="deviceSelect">
+        <label>Load Device
+          <select id="loadDeviceSelect">
             <option>CPU</option>
             <option>GPU</option>
             <option>NPU</option>
-            <option>AUTO</option>
           </select>
         </label>
-        <button id="switchDevice">Switch Device</button>
-
-        <label>Performance Mode
-          <select id="policySelect">
-            <option value="BALANCED">BALANCED (AUTO:GPU,NPU,CPU)</option>
-            <option value="PERFORMANCE">PERFORMANCE (prefer GPU)</option>
-            <option value="BATTERY_SAVER">BATTERY_SAVER (prefer NPU)</option>
-          </select>
-        </label>
-        <button id="setPolicy">Set Performance Mode</button>
+        <button id="loadDevice">Load on Device</button>
+        <span id="loadStatus" class="status-indicator"></span>
       </div>
+      <p class="hint">Load models on additional devices for instant switching. Only loaded devices can be used for inference.</p>
       <p class="hint">If GPU load fails, try switching to CPU/NPU first, then run terminal command <strong>.\npu_cli.ps1 -Command load -Arguments "GPU"</strong> to view full diagnostics.</p>
 
       <div class="toggle-grid">
-        <label><input data-feature="json" class="feature-toggle" type="checkbox" /> json</label>
-        <label><input data-feature="split-prefill" class="feature-toggle" type="checkbox" /> split-prefill</label>
-        <label><input data-feature="context-routing" class="feature-toggle" type="checkbox" /> context-routing</label>
-        <label><input data-feature="optimize-memory" class="feature-toggle" type="checkbox" /> optimize-memory</label>
+        <label title="Route prefill and decode across multiple devices for split execution"><input data-feature="split-prefill" class="feature-toggle" type="checkbox" /> split-prefill</label>
+        <label title="Enable context-aware device routing based on request input"><input data-feature="context-routing" class="feature-toggle" type="checkbox" /> context-routing</label>
+        <label title="Enable memory-saving INT8 KV-cache compression"><input data-feature="optimize-memory" class="feature-toggle" type="checkbox" /> optimize-memory</label>
+      </div>
+      <div id="featureConfirmation" class="feature-confirmation">Toggle a feature to apply it to the backend and refresh browser state.</div>
+      <div class="feature-descriptions">
+        <p><strong>split-prefill</strong>: split prefill and decode work across devices (requires 2+ loaded devices).</p>
+        <p><strong>context-routing</strong>: route requests intelligently to the best device by context.</p>
+        <p><strong>optimize-memory</strong>: reduce memory use via INT8 cache optimization.</p>
       </div>
 
       <div class="row">
@@ -204,7 +215,7 @@
         <button id="refreshModels" class="ghost">Refresh Models</button>
         <button id="refreshBackends" class="ghost">Refresh Backends</button>
       </div>
-
+      <p class="hint">Backends are not preinstalled. Install the backend runtime locally first, then register it here with a unique ID, type, and executable path.</p>
       <div id="registryList" class="registry-list"></div>
       <div id="registryDetail" class="registry-detail-card"></div>
       <details class="raw-toggle">
@@ -218,10 +229,11 @@
           <select id="modelSelect"></select>
           <button id="selectModel">Select Model</button>
         </div>
+        <p class="hint"><strong>Import a Model:</strong> <strong>Inference</strong> uses OpenVINO GenAI: the <strong>selected</strong> entry must point at a folder that contains OpenVINO IR (a <code>.xml</code> plus weights). You can still register <code>gguf</code> or other formats as a record of HF downloads—select an OpenVINO IR model before restart to actually run chat. To change only the registry ID, use <strong>Rename ID</strong> on the detail card.</p>
         <div class="row">
-          <input id="modelImportId" type="text" placeholder="model id" />
-          <input id="modelImportPath" type="text" placeholder="./models/YourModel" />
-          <input id="modelImportFormat" type="text" value="openvino" placeholder="format" />
+          <input id="modelImportId" type="text" placeholder="e.g., gemma-4-e4b-it-gguf" />
+          <input id="modelImportPath" type="text" placeholder="e.g., ./models/gemma-4-e4b-it-gguf/model-4b-q4.gguf" />
+          <input id="modelImportFormat" type="text" placeholder="gguf, openvino, pytorch, etc." />
           <button id="importModel">Import Model</button>
         </div>
 
@@ -258,23 +270,28 @@
 
     <section class="panel glass control-only" id="controlTerminalPanel">
       <h2>Terminal Model Flow</h2>
-      <p class="hint">OpenClaw-style: download in terminal first, then activate from Registry Explorer.</p>
+      <p class="hint">Download any Hugging Face model first, then register it in Registry Explorer.</p>
 
       <ol class="flow-steps">
-        <li>Choose a preset model below, then click Build Command.</li>
-        <li>Run the command in terminal to download into your local models folder.</li>
-        <li>Open Registry Explorer and use Select Model and Select Backend.</li>
+        <li>Go to <a href="https://huggingface.co/models" target="_blank" rel="noreferrer">huggingface.co/models</a> and choose a model you want.</li>
+        <li>Enter the repository path and a local model ID below, then click Build Command.</li>
+        <li>Run the generated terminal command to download the model files locally.</li>
+        <li>Make sure you also install a backend runtime locally (OpenVINO, llama.cpp, vLLM, etc.).</li>
+        <li>In Registry Explorer, import/select the model and add/select the backend.</li>
       </ol>
 
-      <div class="preset-grid">
-        <button type="button" class="ghost model-preset" data-repo="Qwen/Qwen2.5-0.5B-Instruct" data-id="qwen-0.5b" data-format="openvino">Qwen 2.5 0.5B</button>
-        <button type="button" class="ghost model-preset" data-repo="meta-llama/Llama-3.1-8B-Instruct" data-id="llama-3.1-8b" data-format="openvino">Llama 3.1 8B</button>
-        <button type="button" class="ghost model-preset" data-repo="TinyLlama/TinyLlama-1.1B-Chat-v1.0" data-id="tinyllama-1.1b" data-format="openvino">TinyLlama 1.1B</button>
+      <div class="hint">Use a repo path such as <code>unsloth/gemma-4-E4B-it-GGUF</code> or another GGUF-compatible model. Your model must be downloaded locally before registry import.</div>
+      <div class="hint">To avoid downloading all repo versions, specify a single filename (e.g., <code>model-v1-4b-q4.gguf</code>). Leave blank to download everything.</div>
+      <div class="hint"><strong>Where to find the filename:</strong> Go to <a href="https://huggingface.co/models" target="_blank" rel="noreferrer">huggingface.co</a>, browse to your model repo, then click the <strong>Files and versions</strong> tab. Look for a <code>.gguf</code> file (like <code>model-4b-q4.gguf</code>) and copy its exact name.</div>
+      <div class="hint">Install the backend runtime first, then use the Add Backend Wizard to register it. Selecting a backend here only pre-fills the form.</div>
+
+      <div class="row">
+        <label>HF Repo <input id="terminalModelRepo" type="text" value="unsloth/gemma-4-E4B-it-GGUF" placeholder="owner/model-name" /></label>
+        <label>Local ID <input id="terminalModelId" type="text" value="gemma-4-e4b-it-gguf" placeholder="local-model-id" /></label>
       </div>
 
       <div class="row">
-        <label>HF Repo <input id="terminalModelRepo" type="text" value="Qwen/Qwen2.5-0.5B-Instruct" /></label>
-        <label>Local ID <input id="terminalModelId" type="text" value="qwen-hf" /></label>
+        <label>Filename (optional) <input id="terminalModelFilename" type="text" placeholder="model-4b-q4.gguf (leave blank for all files)" /></label>
       </div>
 
       <div class="row">
@@ -285,21 +302,22 @@
             <option value="vllm">vLLM</option>
           </select>
         </label>
-        <button id="applyBackendPreset" type="button" class="ghost">Use Backend Preset</button>
+        <button id="applyBackendPreset" type="button" class="ghost">Populate Backend Fields</button>
       </div>
+      <p class="hint">This button only fills the backend form fields. After that, use Add Backend or Select Backend in Registry Explorer.</p>
 
       <div class="row">
         <button id="buildTerminalCommand" type="button" class="ghost">Build Command</button>
         <button id="copyTerminalCommand" type="button" class="ghost">Copy Command</button>
       </div>
-      <pre id="terminalCommandPreview" class="output compact-output">.\npu_cli.ps1 -Command model -Arguments "download","Qwen/Qwen2.5-0.5B-Instruct","qwen-hf"</pre>
-      <p class="hint">Tip: Presets only fill fields. Actual model files are downloaded by your terminal command.</p>
+      <pre id="terminalCommandPreview" class="output compact-output">.\npu_cli.ps1 -Command model -Arguments "download","meta-llama/Llama-3.1-8B-Instruct","llama-3.1-8b"</pre>
+      <p class="hint">Tip: Build Command creates a terminal download command. Copy it, run it, then import the downloaded model in Registry Explorer.</p>
     </section>
   </main>
 
   <dialog id="backendWizard" class="wizard">
     <h3>Add New Backend</h3>
-    <p class="hint">Step 1: Enter identity. Step 2: Provide entrypoint. Step 3: Save.</p>
+    <p class="hint">Install the backend runtime locally first, then register it here with a unique ID, type, and entrypoint path.</p>
     <div class="row">
       <label>ID <input id="wizardBackendId" type="text" placeholder="backend id" /></label>
       <label>Type <input id="wizardBackendType" type="text" value="external" /></label>

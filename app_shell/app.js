@@ -610,8 +610,13 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     if (splitOn) {
       setChip("rSplitPrefill", "split-prefill: on", deviceCount >= 2 ? "ready" : "busy");
     } else {
-      setChip("rSplitPrefill", "split-prefill: off", "busy");
+      setChip("rSplitPrefill", "split-prefill: off", "ready");
     }
+
+    const contextRoutingOn = normalizeOnOff(status.context_routing);
+    const optimizeMemoryOn = normalizeOnOff(status.optimize_memory);
+    setChip("rContextRouting", `context-routing: ${contextRoutingOn ? "on" : "off"}`, contextRoutingOn ? "ready" : "ready");
+    setChip("rOptimizeMemory", `optimize-memory: ${optimizeMemoryOn ? "on" : "off"}`, optimizeMemoryOn ? "ready" : "ready");
   }
 
   function renderStatusCards(status) {
@@ -1199,6 +1204,19 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     const pathName = pathValue.replace(/\\/g, "/").split("/").filter(Boolean).pop() || pathValue;
     const selectLabel = registryView === "models" ? "Select Model" : "Select Backend";
     const stateLabel = state === "ready" ? "&#x25CF; Active" : state;
+    const renameRow =
+      registryView === "models"
+        ? `<div class="registry-rename-row">
+        <label class="registry-rename-label">New ID <input type="text" class="registry-rename-input" placeholder="unique registry id" autocomplete="off" /></label>
+        <button type="button" class="ghost registry-action-rename">Rename ID</button>
+      </div>`
+        : "";
+    const descRaw = item.description ? String(item.description) : "";
+    const descSafe = descRaw
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/"/g, "&quot;");
+    const descBlock = descSafe ? `<p class="hint registry-detail-desc">${descSafe}</p>` : "";
 
     detailEl.innerHTML = `
       <div class="registry-detail-head">
@@ -1208,11 +1226,13 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       <div class="registry-tags">
         ${tags.map((t) => `<span class="registry-tag">${t}</span>`).join("")}
       </div>
+      ${descBlock}
       ${pathValue ? `<div class="registry-path" title="${pathValue}">&#x1F4C1; ${pathName}</div>` : ""}
       <div class="registry-detail-actions">
         <button type="button" class="ghost registry-action-select">${selectLabel}</button>
         <button type="button" class="ghost registry-action-raw">{ } Raw JSON</button>
       </div>
+      ${renameRow}
     `;
 
     detailEl.querySelector(".registry-action-select")?.addEventListener("click", () => {
@@ -1237,6 +1257,22 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         if (rawDetails) rawDetails.setAttribute("open", "");
       }
     });
+
+    if (registryView === "models") {
+      const renameBtn = detailEl.querySelector(".registry-action-rename");
+      const renameInput = detailEl.querySelector(".registry-rename-input");
+      renameBtn?.addEventListener("click", () => {
+        const toId = String(renameInput?.value || "").trim();
+        renameModelId(item.id, toId, renameInput, renameBtn);
+      });
+      renameInput?.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          const toId = String(renameInput?.value || "").trim();
+          renameModelId(item.id, toId, renameInput, renameBtn);
+        }
+      });
+    }
 
     selectedRegistryItem = item;
   }
@@ -1268,9 +1304,18 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     appendText(outputEl, `\n\n${line}`);
   }
 
+  function getPrimaryDeviceSelect() {
+    return el("wDeviceSelect") || el("deviceSelect");
+  }
+
+  function getPrimaryPolicySelect() {
+    return el("wPolicySelect") || el("policySelect");
+  }
+
   async function switchDevice() {
     try {
-      const target = normalizeDevice(el("deviceSelect")?.value || "");
+      const select = getPrimaryDeviceSelect();
+      const target = normalizeDevice(select?.value || "");
       if (!target) {
         throw new Error("Select a target device first");
       }
@@ -1294,16 +1339,40 @@ if (window.__NPU_APP_SHELL_LOADED__) {
 
   async function setPolicy() {
     try {
+      const select = getPrimaryPolicySelect();
+      const policy = select?.value || "";
       const result = await requestJson("/cli/policy", {
         method: "POST",
-        body: JSON.stringify({ policy: el("policySelect").value }),
+        body: JSON.stringify({ policy }),
       });
       printJson(el("devicePolicyOutput"), result);
-      addActivity(`Policy set to ${result.new_policy || el("policySelect").value}`, "ready");
+      addActivity(`Policy set to ${result.new_policy || policy}`, "ready");
       await refreshStatus();
     } catch (err) {
       el("devicePolicyOutput").textContent = String(err.message || err);
       addActivity(`Policy change failed: ${String(err.message || err)}`, "error");
+    }
+  }
+
+  async function loadDevice() {
+    try {
+      const target = normalizeDevice(el("loadDeviceSelect")?.value || "");
+      if (!target) {
+        throw new Error("Select a device to load first");
+      }
+      addActivity(`Loading model on ${target}...`, "busy");
+      const result = await requestJson("/cli/device/load", {
+        method: "POST",
+        body: JSON.stringify({ device: target }),
+      });
+      el("loadStatus").textContent = `✓ Model loaded on ${target}`;
+      el("loadStatus").className = "status-indicator success";
+      addActivity(`Model loaded on ${target} (ready for switching)`, "ready");
+      await refreshStatus();
+    } catch (err) {
+      el("loadStatus").textContent = `✗ Load failed: ${String(err.message || err)}`;
+      el("loadStatus").className = "status-indicator error";
+      addActivity(`Device load failed: ${String(err.message || err)}`, "error");
     }
   }
 
@@ -1335,6 +1404,13 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     return `${feature}: ${msg}`;
   }
 
+  function setFeatureConfirmation(message, type = "ready") {
+    const target = el("featureConfirmation");
+    if (!target) return;
+    target.textContent = message;
+    target.className = `feature-confirmation ${type}`;
+  }
+
   async function handleFeatureToggleChange(toggle) {
     const output = el("featuresOutput");
     const feature = toggle.dataset.feature;
@@ -1343,11 +1419,15 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     toggle.disabled = true;
     try {
       const result = await setFeatureToggle(feature, desiredState);
-      output.textContent = `${feature}: ${result.status}\nRefreshing runtime state...`;
+      const statusText = `${feature}: ${result.status}`;
+      output.textContent = `${statusText}\nRefreshing runtime state...`;
+      setFeatureConfirmation(`Updated ${feature} → ${result.status}. Runtime state refreshed.`);
       addActivity(`Feature ${feature} -> ${result.status}`, "ready");
     } catch (err) {
       toggle.checked = !desiredState;
-      output.textContent = friendlyFeatureError(feature, err);
+      const message = friendlyFeatureError(feature, err);
+      output.textContent = message;
+      setFeatureConfirmation(message, "error");
       addActivity(`Feature toggle failed: ${feature}`, "error");
     } finally {
       toggle.disabled = false;
@@ -1399,6 +1479,10 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         body: JSON.stringify({ id }),
       });
       printJson(output, result);
+      if (result.warning) {
+        appendText(output, `\n\n${result.warning}`);
+        addActivity(String(result.warning), "busy");
+      }
       showRestartRequired(output);
       addActivity(`Model selected: ${id} (pending restart)`, "busy");
       await refreshModelRegistry();
@@ -1411,15 +1495,70 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     }
   }
 
+  function detectModelFormat(path) {
+    const lowerPath = String(path).toLowerCase();
+    if (lowerPath.endsWith(".gguf")) return "gguf";
+    if (lowerPath.endsWith(".bin") || lowerPath.endsWith(".pt")) return "pytorch";
+    if (lowerPath.endsWith(".xml") || lowerPath.endsWith(".onnx")) return "openvino";
+    return "";
+  }
+
+  async function renameModelId(fromId, toId, inputEl, busyButton) {
+    const output = el("registryOutput");
+    if (!fromId || !toId) {
+      if (output) output.textContent = "Rename requires the current id and a new id.";
+      return;
+    }
+    const origLabel = busyButton?.textContent;
+    try {
+      if (busyButton) {
+        busyButton.disabled = true;
+        busyButton.textContent = "Renaming...";
+      }
+      const result = await requestJson("/cli/model/rename", {
+        method: "POST",
+        body: JSON.stringify({ from_id: fromId, to_id: toId }),
+      });
+      if (output) printJson(output, result);
+      addActivity(`Model id renamed: ${fromId} → ${toId}`, "ready");
+      await refreshModelRegistry();
+      const updated = modelRegistryCache.find((m) => m.id === toId);
+      if (updated && registryView === "models") {
+        renderRegistryDetailCard(updated);
+        if (inputEl) inputEl.value = "";
+      }
+      await refreshStatus();
+    } catch (err) {
+      if (output) output.textContent = String(err.message || err);
+      addActivity(`Model rename failed: ${String(err.message || err)}`, "error");
+    } finally {
+      if (busyButton) {
+        busyButton.disabled = false;
+        busyButton.textContent = origLabel ?? "Rename ID";
+      }
+    }
+  }
+
   async function importModel() {
     const output = el("registryOutput");
     const id = el("modelImportId").value.trim();
     const path = el("modelImportPath").value.trim();
-    const format = el("modelImportFormat").value.trim() || "openvino";
-    const backend = el("backendSelect").value || "openvino";
+    let format = el("modelImportFormat").value.trim();
+    
+    // Auto-detect format from path if not provided
+    if (!format) {
+      format = detectModelFormat(path);
+    }
+    
+    const backend = el("backendSelect").value || "";
 
     if (!id || !path) {
       output.textContent = "Model import requires id and path.";
+      return;
+    }
+    
+    if (!format) {
+      output.textContent = "Could not detect model format. Please specify (gguf, openvino, pytorch, etc).";
       return;
     }
 
@@ -1430,9 +1569,15 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         body: JSON.stringify({ id, path, format, backend, status: "ready" }),
       });
       printJson(output, result);
+      if (result.warning) {
+        appendText(output, `\n\n${result.warning}`);
+        addActivity(String(result.warning), "busy");
+      }
       addActivity(`Model imported: ${id}`, "ready");
       await refreshModelRegistry();
       el("modelImportId").value = "";
+      el("modelImportPath").value = "";
+      el("modelImportFormat").value = "";
       await refreshStatus();
     } catch (err) {
       output.textContent = String(err.message || err);
@@ -1575,12 +1720,17 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   function buildTerminalCommand() {
     const repo = String(el("terminalModelRepo")?.value || "").trim();
     const id = String(el("terminalModelId")?.value || "").trim();
+    const filename = String(el("terminalModelFilename")?.value || "").trim();
     const preview = el("terminalCommandPreview");
     if (!preview) return;
     const localId = id || (repo.split("/").pop() || "my-model");
-    preview.textContent = repo
-      ? `.\\npu_cli.ps1 -Command model -Arguments "download","${repo}","${localId}"`
-      : `.\\npu_cli.ps1 -Command model -Arguments "download","<repo>","<local-id>"`;
+    if (!repo) {
+      preview.textContent = `.\\npu_cli.ps1 -Command model -Arguments "download","<repo>","<local-id>","[filename]"`;
+    } else if (filename) {
+      preview.textContent = `.\\npu_cli.ps1 -Command model -Arguments "download","${repo}","${localId}","${filename}"`;
+    } else {
+      preview.textContent = `.\\npu_cli.ps1 -Command model -Arguments "download","${repo}","${localId}"`;
+    }
   }
 
   async function copyTerminalCommand() {
@@ -1991,6 +2141,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       if (el("policySelect") && el("wPolicySelect")) el("policySelect").value = el("wPolicySelect").value;
       setPolicy();
     });
+    on("loadDevice", "click", loadDevice);
     on("setThreshold", "click", setThreshold);
     on("refreshStatus", "click", refreshStatus);
     on("fetchMetrics", "click", () => fetchMetrics(false));
@@ -2043,6 +2194,19 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     on("selectBackend", "click", selectBackend);
     on("addBackend", "click", addBackend);
 
+    // Auto-detect format when path is entered
+    if (el("modelImportPath")) {
+      el("modelImportPath").addEventListener("input", () => {
+        const path = el("modelImportPath").value.trim();
+        if (path && !el("modelImportFormat").value) {
+          const detected = detectModelFormat(path);
+          if (detected) {
+            el("modelImportFormat").value = detected;
+          }
+        }
+      });
+    }
+
     on("modelSelect", "change", renderModelDetails);
     on("backendSelect", "change", renderBackendDetails);
 
@@ -2080,6 +2244,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     on("applyBackendPreset", "click", applyBackendPreset);
     on("terminalModelRepo", "input", buildTerminalCommand);
     on("terminalModelId", "input", buildTerminalCommand);
+    on("terminalModelFilename", "input", buildTerminalCommand);
 
     for (const preset of document.querySelectorAll(".model-preset")) {
       preset.addEventListener("click", () => applyModelPreset(preset));
