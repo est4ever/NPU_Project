@@ -85,19 +85,27 @@ $targetExe = $resolved.Exe
 $useOpenVinoEnv = [bool]$resolved.UseOpenVinoSetup
 
 if ($useOpenVinoEnv) {
-    Write-Host '[Setup] Loading OpenVINO environment...' -ForegroundColor Cyan
+    Write-Host '[Setup] Resolving OpenVINO environment...' -ForegroundColor Cyan
+    $distDir = Join-Path $scriptDir "dist"
+    $bundledOpenVino = Test-Path -LiteralPath (Join-Path $distDir "openvino.dll")
     $ovPath = Find-OpenVINOSetupVars
 
-    if (-not (Test-Path $ovPath)) {
-        Write-Host ('[Error] OpenVINO setupvars.bat not found at: ' + $ovPath) -ForegroundColor Red
-        Write-Host '[Error] Set OPENVINO_GENAI_DIR or install OpenVINO GenAI archive under your Downloads folder.' -ForegroundColor Red
-        exit 1
-    }
-
-    $null = cmd /c "call `"$ovPath`" && set" | ForEach-Object {
-        if ($_ -match '^([^=]+)=(.*)') {
-            [Environment]::SetEnvironmentVariable($matches[1], $matches[2], [System.EnvironmentVariableTarget]::Process)
+    if ($ovPath -and (Test-Path -LiteralPath $ovPath)) {
+        Write-Host '[Setup] Loading OpenVINO setupvars.bat (dev / full install).' -ForegroundColor Cyan
+        $null = cmd /c "call `"$ovPath`" && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)') {
+                [Environment]::SetEnvironmentVariable($matches[1], $matches[2], [System.EnvironmentVariableTarget]::Process)
+            }
         }
+    } elseif ($bundledOpenVino) {
+        # Release zip: build.ps1 copies runtime DLLs into dist\ — no separate OpenVINO SDK install needed.
+        Write-Host '[Setup] Using bundled OpenVINO runtime in dist\.' -ForegroundColor Green
+        $env:PATH = $distDir + [IO.Path]::PathSeparator + $env:PATH
+    } else {
+        Write-Host '[Error] No OpenVINO runtime available.' -ForegroundColor Red
+        Write-Host '  Option A — End user: install from a GitHub Release (or run install.ps1) so dist\ contains npu_wrapper.exe and OpenVINO DLLs.' -ForegroundColor Yellow
+        Write-Host '  Option B — Developer: extract OpenVINO GenAI for Windows, set OPENVINO_GENAI_DIR to that folder, or put it under Downloads as in README.' -ForegroundColor Yellow
+        exit 1
     }
 } else {
     Write-Host ('[Setup] External backend - skipping OpenVINO setupvars (entry: ' + $targetExe + ')') -ForegroundColor Cyan

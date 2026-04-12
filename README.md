@@ -4,7 +4,7 @@ Windows control plane and **OpenVINO GenAI** C++ wrapper (`npu_wrapper`): device
 
 > **Important:** This repo does **not** ship models. You export/download models locally into `models/`.
 
-> **Distribution / published builds:** What you ship to end users is typically the **wrapper, scripts, and app shell**—not model weights, not OpenVINO or other vendor runtimes, and not preconfigured backends. Users install their own stack, then register **models** and **backends** in the UI or JSON registries. Use **builtin** + **npu_wrapper** when targeting OpenVINO GenAI; use **external** for any other HTTP-compatible server you wire up.
+> **Distribution / published builds:** End users should **not** need a separate OpenVINO SDK install if they use a **GitHub Release** zip: `build.ps1` stages `npu_wrapper.exe` plus OpenVINO **runtime DLLs** into `dist\`, and `run.ps1` uses that folder when `setupvars.bat` is not present. You still **do not** ship **model weights**; users place OpenVINO IR under `models\`. They should keep **Intel GPU / NPU drivers** current. Developers who compile from source still need the OpenVINO GenAI package for CMake + `build.ps1`. Use **builtin** + **npu_wrapper** for OpenVINO GenAI; **external** for another HTTP-compatible server.
 
 ### What belongs on GitHub (repo vs Releases)
 

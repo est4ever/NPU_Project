@@ -90,6 +90,7 @@ $exeSrc    = Join-Path $scriptDir "build\Release\npu_wrapper.exe"
 $distDir   = Join-Path $scriptDir "dist"
 $openvinoRoot = Split-Path -Parent $setupvars
 $ovinoBin  = Join-Path $openvinoRoot "runtime\bin\intel64\Release"
+$ovinoLib  = Join-Path $openvinoRoot "runtime\lib\intel64\Release"
 
 Write-Host "Staging dist/ ..."
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
@@ -103,6 +104,10 @@ if (Test-Path $ovinoBin) {
     Copy-Item -Recurse -Force (Join-Path $ovinoBin "*") $distDir
 } else {
     Write-Warning "OpenVINO bin dir not found at $ovinoBin - skipping DLL copy"
+}
+# Inference plugins (NPU/GPU/CPU) — needed for portable dist\ without setupvars.bat
+if (Test-Path $ovinoLib) {
+    Copy-Item -Force (Join-Path $ovinoLib "*.dll") $distDir -ErrorAction SilentlyContinue
 }
 foreach ($dll in @("msvcp140.dll", "vcruntime140.dll")) {
     $src = "C:\Windows\System32\$dll"
