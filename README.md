@@ -1,17 +1,21 @@
 # Loomis — Unified orchestration for local AI runtimes
 
-Windows control plane and **OpenVINO GenAI** C++ wrapper (`npu_wrapper`): device selection (CPU / GPU / NPU), REST API, and the Loomis app shell. See `LICENSE` (MIT).
+**Loomis is a control plane:** browser **app shell**, **`npu_cli`**, and a documented **HTTP API** so you can drive *whatever* inference stack you plug in. Nothing about the UI requires Intel hardware.
 
-> **Important:** This repo does **not** ship models. You export/download models locally into `models/`.
+This repo ships a **reference backend** — **`npu_wrapper`** (C++, **OpenVINO GenAI**) with CPU / GPU / **NPU** routing — for people who want that stack. If you use **another** runtime (CUDA, ROCm, cloud API, llama.cpp server, vLLM, etc.), set **`registry/backends_registry.json`** to **`type: "external"`** and point **`entrypoint`** at your executable or launcher; that process must speak the **same HTTP surface** as `npu_wrapper` (e.g. `/v1/chat/completions`, `/v1/cli/status`, …). Device and policy controls in the shell apply to whatever the active backend exposes over that API.
 
-> **Distribution / published builds:** End users should **not** need a separate OpenVINO SDK install if they use a **GitHub Release** zip: `build.ps1` stages `npu_wrapper.exe` plus OpenVINO **runtime DLLs** into `dist\`, and `run.ps1` uses that folder when `setupvars.bat` is not present. You still **do not** ship **model weights**; users place OpenVINO IR under `models\`. They should keep **Intel GPU / NPU drivers** current. Developers who compile from source still need the OpenVINO GenAI package for CMake + `build.ps1`. Use **builtin** + **npu_wrapper** for OpenVINO GenAI; **external** for another HTTP-compatible server.
+See `LICENSE` (MIT).
+
+> **Important:** This repo does **not** ship model weights. You (or your backend) supply models in the format your stack expects.
+
+> **Distribution:** The **GitHub Release** zip (**`loomis-dist-windows-x64.zip`**) is **optional**: it is only the **bundled reference** `npu_wrapper` + OpenVINO **runtime DLLs** for Windows x64. **Shell-only** users can `git clone` or run **`install.ps1 -ShellOnly`** and never download that zip. People who *do* use the reference backend get a portable **`dist\`** layout (`build.ps1` + `run.ps1`); Intel GPU/NPU users should keep **drivers** current. **Developers** building `npu_wrapper` still need the OpenVINO GenAI SDK for CMake.
 
 ### What belongs on GitHub (repo vs Releases)
 
 | Location | What goes there |
 |----------|------------------|
 | **Repository** | Source code, `app_shell/`, PowerShell scripts, `LICENSE`, `README.md`, `SECURITY.md`, `registry/*.example.json`, root **`install.ps1`**. No `models/`, no `dist/`, no `build/`, no real `registry/*.json`, no secrets. |
-| **Releases** (tags like `v1.0.0`) | One zip per version, **exact filename** `loomis-dist-windows-x64.zip`, containing the **files inside** `dist/` at the **root** of the zip (`npu_wrapper.exe` + DLLs—not a nested `dist` folder). |
+| **Releases** (tags like `v1.0.0`) | **Optional** reference runtime: **exact filename** `loomis-dist-windows-x64.zip`, **contents** of `dist/` at zip **root** (`npu_wrapper.exe` + DLLs). Omit if you only distribute the shell; external-backend users build or bring their own server. |
 
 After `.\build.ps1`, create the release asset from the repo root:
 
@@ -23,46 +27,48 @@ Upload **`loomis-dist-windows-x64.zip`** to the GitHub Release. The hosted **`in
 
 ### One-line install (like OpenClaw)
 
-Requires **[Git for Windows](https://git-scm.com/download/win)**. Clones this repo and drops the latest **Release** binary zip into `dist\`.
+Requires **[Git for Windows](https://git-scm.com/download/win)**.
+
+**Full install** — clone + download the latest **Release** zip into `dist\` (reference OpenVINO backend):
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing)))"
 ```
 
-Install under a custom folder:
+**Shell only** — clone/update repo **without** downloading `npu_wrapper`; use your own **external** backend:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -ShellOnly"
+```
+
+Custom folder / pin release zip version:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -InstallDir 'D:\AI\Loomis'"
-```
-
-Pin the **prebuilt** zip to a specific release (source still tracks `main` unless you change `install.ps1` / clone yourself):
-
-```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -ReleaseTag v1.0.0"
 ```
 
-Then install OpenVINO GenAI, add a model under `models\`, and run `.\portable_setup.ps1` or `.\start_app.ps1` from the install folder.
+After install: configure **`registry/backends_registry.json`** (or the app shell **Registry** panel) for **external** vs **builtin**, add models as your backend requires, then **`.\start_app.ps1`**. Reference-backend users can run **`.\portable_setup.ps1`** when using **`npu_wrapper`** + OpenVINO IR under **`models\`**.
 
 ## What This Project Does
 
-- Loads OpenVINO GenAI LLMs from folders like `./models/Qwen2.5-0.5B-Instruct`
-- **Scheduler-based device selection** with three policies: BATTERY_SAVER (NPU-first), PERFORMANCE (GPU-first), BALANCED (AUTO heterogeneous)
-- **Explicit device preload/switch flow**: load then switch CPU/GPU/NPU at runtime
-- **Multi-device execution mode** (`--benchmark`): Runs 2-second benchmarks on all devices, loads model on all of them, and allows runtime switching
-- **REST API Server** (`--server`): OpenAI-compatible HTTP endpoints for external integration
-- **Minimal App Shell** (`app_shell/`): Browser control plane (device, mode, features, registry)
-- **Terminal-first chat workflow** via `npu_cli.ps1 -Command chat`
-- **Context-aware routing** (`--context-routing`): Automatically selects best device based on prompt length
-- **Advanced KV-cache** (`--optimize-memory`): INT8 quantization for 50-75% memory savings
-- Auto-detects available hardware and applies policy-based routing
-- Interactive terminal-based prompting with automatic fallback on device errors
-- Real-time benchmarking: shows execution time after each generation
-- `--json` emits NDJSON metrics for UI/automation
-- `--split-prefill` routes long prompts to best TTFT device, short prompts to best throughput device
-- `--speculative` enables OpenVINO's native speculative decoding with draft/verify pipeline and real acceptance metrics
-- `stats` command prints OpenVINO GenAI performance metrics (TTFT, TPOT, throughput)
-- Clean backend interface (`IBackend.h`) and scheduler interface (`IScheduler.h`) with OpenVINO implementations
-- Auto-cleanup: deletes log files on successful exit (keeps them on errors for debugging)
+**Control plane (backend-agnostic)**
+
+- **App shell** (`app_shell/`): browser UI for registry, connectivity, and commands your backend exposes over HTTP
+- **`npu_cli.ps1`**: terminal chat and CLI actions against the same API
+- **Pluggable backends** via **`registry/backends_registry.json`**: **`builtin`** (reference `npu_wrapper` + OpenVINO env) or **`external`** (any server you provide — vendor-neutral)
+- **REST contract**: OpenAI-style chat and Loomis CLI/status endpoints; external servers must implement the same surface (see README *Backends registry* section)
+
+**Reference backend only — OpenVINO GenAI (`npu_wrapper`)**
+
+These apply when **`npu_wrapper`** is the active backend (not required for **external** users):
+
+- Loads OpenVINO IR models from folders like `./models/Qwen2.5-0.5B-Instruct`
+- **Scheduler-based device selection** (policies tuned for Intel CPU / GPU / **NPU** in that stack)
+- **Multi-device** / benchmark / speculative / KV-cache / routing features where OpenVINO exposes them
+- **`stats`**, `--json`, and related metrics from OpenVINO GenAI
+- Internal interfaces: `IBackend.h`, `IScheduler.h`, OpenVINO implementations under `OpenVINO/`
+- Auto-cleanup of log files on successful exit (keeps them on errors for debugging)
 
 ### Minimal App Shell (Day 10)
 
@@ -93,11 +99,15 @@ For the cutover process and rollback rules, see `CUTOVER_READINESS.md`.
 
 ### First time — new machine
 
+**Using the reference OpenVINO backend (`npu_wrapper` in `dist\`):**
+
 ```powershell
 .\portable_setup.ps1
 ```
 
-Wizard that selects your model, writes the registry, and launches the control panel. No build step — assumes you have a pre-built release (`dist\npu_wrapper.exe` included).
+Wizard selects model, writes registries, can launch the control panel. Expects **`dist\npu_wrapper.exe`** (Release zip or your own build).
+
+**Using an external backend only:** copy **`registry/*.example.json`** to **`registry/*.json`**, edit **`backends_registry.json`** (`type: external`, your **`entrypoint`**), then **`.\start_app.ps1`**. You do not need **`dist\npu_wrapper.exe`** or OpenVINO on that machine if your server is self-contained.
 
 ### Every-day launch
 

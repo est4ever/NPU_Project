@@ -1,10 +1,9 @@
 # Loomis — remote installer (OpenClaw-style one-liner target)
 # Usage (from README):
-#   powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing)))"
-# With a specific prebuilt release:
-#   ... install.ps1')))" -ReleaseTag v1.0.0
+#   Default: clone + download reference npu_wrapper zip from Releases.
+#   Shell only: ... install.ps1')))" -ShellOnly   (external backend / no OpenVINO binary)
 #
-# Requires: git (https://git-scm.com/download/win). Prebuilt zip must exist on GitHub Releases (see README).
+# Requires: git (https://git-scm.com/download/win). Prebuilt zip required unless -ShellOnly.
 
 param(
     [string]$InstallDir = "",
@@ -12,7 +11,8 @@ param(
     [string]$Branch = "main",
     [string]$GitRemote = "https://github.com/est4ever/Loomis.git",
     [string]$GitHubRepoPath = "est4ever/Loomis",
-    [string]$DistAssetName = "loomis-dist-windows-x64.zip"
+    [string]$DistAssetName = "loomis-dist-windows-x64.zip",
+    [switch]$ShellOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,7 +36,10 @@ function Get-DistDownloadUrl {
 Write-Host "Loomis install" -ForegroundColor Cyan
 Write-Host "  Install dir   : $InstallDir"
 Write-Host "  Source branch : $Branch"
-Write-Host "  Prebuilt tag  : $(if ($ReleaseTag -eq 'latest' -or -not $ReleaseTag.Trim()) { 'latest release' } else { $ReleaseTag.Trim() })"
+Write-Host "  Mode          : $(if ($ShellOnly) { 'shell only (no reference binary zip)' } else { 'clone + reference dist zip' })"
+if (-not $ShellOnly) {
+    Write-Host "  Prebuilt tag  : $(if ($ReleaseTag -eq 'latest' -or -not $ReleaseTag.Trim()) { 'latest release' } else { $ReleaseTag.Trim() })"
+}
 Write-Host ""
 
 $git = Get-Command git -ErrorAction SilentlyContinue
@@ -75,11 +78,22 @@ if (Test-Path $InstallDir) {
     }
 }
 
+if ($ShellOnly) {
+    Write-Host ""
+    Write-Host "Done (shell only)." -ForegroundColor Green
+    Write-Host "  cd `"$InstallDir`""
+    Write-Host "  Copy registry\*.example.json -> registry\*.json if needed."
+    Write-Host "  Set backends_registry.json to type external + your entrypoint, or add builtin npu_wrapper to dist\ yourself."
+    Write-Host "  .\start_app.ps1"
+    Write-Host ""
+    exit 0
+}
+
 $distDir = Join-Path $InstallDir "dist"
 $url = Get-DistDownloadUrl -Tag $ReleaseTag -RepoPath $GitHubRepoPath -Asset $DistAssetName
 $tmpZip = Join-Path ([System.IO.Path]::GetTempPath()) ("loomis-dist-" + [Guid]::NewGuid().ToString("N") + ".zip")
 
-Write-Host "Downloading prebuilt runtime: $url"
+Write-Host "Downloading reference backend (OpenVINO GenAI) bundle: $url"
 try {
     Invoke-WebRequest -Uri $url -OutFile $tmpZip -UseBasicParsing
 } catch {
@@ -87,6 +101,7 @@ try {
     Write-Host "Download failed. Common causes:" -ForegroundColor Yellow
     Write-Host "  - No GitHub Release yet, or the asset is not named exactly '$DistAssetName'"
     Write-Host "  - Wrong -ReleaseTag (use 'latest' or an existing tag like v1.0.0)"
+    Write-Host "  - Use -ShellOnly if you only need the app shell and an external backend."
     Write-Host "See README: 'What goes on GitHub vs Releases'."
     throw
 }
@@ -107,9 +122,7 @@ if (-not (Test-Path $exe)) {
 
 Write-Host ""
 Write-Host "Done. Next steps:" -ForegroundColor Green
-Write-Host "  1. Install OpenVINO GenAI runtime (see README)."
-Write-Host "  2. Put an OpenVINO IR model under .\models\..."
-Write-Host "  3.  cd `"$InstallDir`""
-Write-Host "      .\portable_setup.ps1"
-Write-Host "   or .\start_app.ps1"
+Write-Host "  Reference backend: put OpenVINO IR under .\models\, run .\portable_setup.ps1 or .\start_app.ps1"
+Write-Host "  External backend: edit registry\backends_registry.json, then .\start_app.ps1"
+Write-Host "  cd `"$InstallDir`""
 Write-Host ""
