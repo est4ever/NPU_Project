@@ -1,5 +1,65 @@
 # Loomis — Unified orchestration for local AI runtimes
 
+## New computer: start here
+
+**Applies to:** Windows. **Models:** this repo does not ship weights—you or your backend provide them. **PowerShell scripts:** if `.\*.ps1` is blocked, run once per user: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
+### Path A — Reference backend (`npu_wrapper` + OpenVINO IR)
+
+Typical setup with the bundled Intel / OpenVINO reference stack.
+
+1. Install **[Git for Windows](https://git-scm.com/download/win)** (required for the one-line installer).
+2. Open **PowerShell** and run (clones the repo and downloads the latest **Release** zip into `dist\`):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing)))"
+```
+
+3. For **Intel GPU/NPU**, install or update **Intel graphics / NPU drivers** (Intel or your PC vendor).
+4. Put an **OpenVINO IR** model folder under `%USERPROFILE%\Loomis\models\...` (or another path you register in the app).
+5. In PowerShell:
+
+```powershell
+cd $env:USERPROFILE\Loomis
+.\portable_setup.ps1
+```
+
+Use **`.\start_app.ps1`** instead if registries are already configured.
+
+6. The browser opens the **app shell**; the API is on **port 8000** by default unless you changed it.
+
+### Path B — Shell only (**external** backend)
+
+No `npu_wrapper` zip. Your server must implement the **same HTTP API** as `npu_wrapper` (e.g. `/v1/chat/completions`, `/v1/cli/status`).
+
+1. Install **Git**.
+2. Run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -ShellOnly"
+```
+
+3. `cd $env:USERPROFILE\Loomis`
+4. If needed, copy **`registry\*.example.json`** → **`registry\*.json`**.
+5. Edit **`registry\backends_registry.json`**: set **`type`** to **`external`** and **`entrypoint`** to your backend launcher.
+6. Start your backend, then **`.\start_app.ps1`**.
+
+### Path C — Manual (no `install.ps1`)
+
+1. `git clone https://github.com/est4ever/Loomis.git` (or download the repo as a zip from GitHub).
+2. Either download **`loomis-dist-windows-x64.zip`** from **[Releases](https://github.com/est4ever/Loomis/releases)** and extract into **`Loomis\dist\`**, or configure an **external** backend as in Path B.
+3. Set **`registry\*.json`** (from examples or **`.\portable_setup.ps1`** for the reference backend).
+4. **`.\start_app.ps1`** (or **`.\portable_setup.ps1`** on first run with the reference backend).
+
+### Optional: custom install folder or pinned Release zip
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -InstallDir 'D:\AI\Loomis'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -ReleaseTag v1.0.0"
+```
+
+---
+
 **Loomis is a control plane:** browser **app shell**, **`npu_cli`**, and a documented **HTTP API** so you can drive *whatever* inference stack you plug in. Nothing about the UI requires Intel hardware.
 
 This repo ships a **reference backend** — **`npu_wrapper`** (C++, **OpenVINO GenAI**) with CPU / GPU / **NPU** routing — for people who want that stack. If you use **another** runtime (CUDA, ROCm, cloud API, llama.cpp server, vLLM, etc.), set **`registry/backends_registry.json`** to **`type: "external"`** and point **`entrypoint`** at your executable or launcher; that process must speak the **same HTTP surface** as `npu_wrapper` (e.g. `/v1/chat/completions`, `/v1/cli/status`, …). Device and policy controls in the shell apply to whatever the active backend exposes over that API.
@@ -23,32 +83,7 @@ After `.\build.ps1`, create the release asset from the repo root:
 Compress-Archive -Path (Join-Path $PWD 'dist\*') -DestinationPath loomis-dist-windows-x64.zip -Force
 ```
 
-Upload **`loomis-dist-windows-x64.zip`** to the GitHub Release. The hosted **`install.ps1`** downloads that asset from **latest** (or a tag you pass in).
-
-### One-line install (like OpenClaw)
-
-Requires **[Git for Windows](https://git-scm.com/download/win)**.
-
-**Full install** — clone + download the latest **Release** zip into `dist\` (reference OpenVINO backend):
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing)))"
-```
-
-**Shell only** — clone/update repo **without** downloading `npu_wrapper`; use your own **external** backend:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -ShellOnly"
-```
-
-Custom folder / pin release zip version:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -InstallDir 'D:\AI\Loomis'"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -ReleaseTag v1.0.0"
-```
-
-After install: configure **`registry/backends_registry.json`** (or the app shell **Registry** panel) for **external** vs **builtin**, add models as your backend requires, then **`.\start_app.ps1`**. Reference-backend users can run **`.\portable_setup.ps1`** when using **`npu_wrapper`** + OpenVINO IR under **`models\`**.
+Upload **`loomis-dist-windows-x64.zip`** to the GitHub Release. The hosted **`install.ps1`** downloads that asset from **latest** (or a tag you pass in). **End-user install steps** are at the top: [New computer: start here](#new-computer-start-here).
 
 ## What This Project Does
 
@@ -99,15 +134,7 @@ For the cutover process and rollback rules, see `CUTOVER_READINESS.md`.
 
 ### First time — new machine
 
-**Using the reference OpenVINO backend (`npu_wrapper` in `dist\`):**
-
-```powershell
-.\portable_setup.ps1
-```
-
-Wizard selects model, writes registries, can launch the control panel. Expects **`dist\npu_wrapper.exe`** (Release zip or your own build).
-
-**Using an external backend only:** copy **`registry/*.example.json`** to **`registry/*.json`**, edit **`backends_registry.json`** (`type: external`, your **`entrypoint`**), then **`.\start_app.ps1`**. You do not need **`dist\npu_wrapper.exe`** or OpenVINO on that machine if your server is self-contained.
+See **[New computer: start here](#new-computer-start-here)** at the top of this README (Paths A–C). Quick recap: reference backend → **`.\portable_setup.ps1`** when **`dist\npu_wrapper.exe`** exists; external-only → registries + **`.\start_app.ps1`**.
 
 ### Every-day launch
 
