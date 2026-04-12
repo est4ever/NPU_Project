@@ -6,6 +6,43 @@ Windows control plane and **OpenVINO GenAI** C++ wrapper (`npu_wrapper`): device
 
 > **Distribution / published builds:** What you ship to end users is typically the **wrapper, scripts, and app shell**—not model weights, not OpenVINO or other vendor runtimes, and not preconfigured backends. Users install their own stack, then register **models** and **backends** in the UI or JSON registries. Use **builtin** + **npu_wrapper** when targeting OpenVINO GenAI; use **external** for any other HTTP-compatible server you wire up.
 
+### What belongs on GitHub (repo vs Releases)
+
+| Location | What goes there |
+|----------|------------------|
+| **Repository** | Source code, `app_shell/`, PowerShell scripts, `LICENSE`, `README.md`, `SECURITY.md`, `registry/*.example.json`, root **`install.ps1`**. No `models/`, no `dist/`, no `build/`, no real `registry/*.json`, no secrets. |
+| **Releases** (tags like `v1.0.0`) | One zip per version, **exact filename** `loomis-dist-windows-x64.zip`, containing the **files inside** `dist/` at the **root** of the zip (`npu_wrapper.exe` + DLLs—not a nested `dist` folder). |
+
+After `.\build.ps1`, create the release asset from the repo root:
+
+```powershell
+Compress-Archive -Path (Join-Path $PWD 'dist\*') -DestinationPath loomis-dist-windows-x64.zip -Force
+```
+
+Upload **`loomis-dist-windows-x64.zip`** to the GitHub Release. The hosted **`install.ps1`** downloads that asset from **latest** (or a tag you pass in).
+
+### One-line install (like OpenClaw)
+
+Requires **[Git for Windows](https://git-scm.com/download/win)**. Clones this repo and drops the latest **Release** binary zip into `dist\`.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing)))"
+```
+
+Install under a custom folder:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -InstallDir 'D:\AI\Loomis'"
+```
+
+Pin the **prebuilt** zip to a specific release (source still tracks `main` unless you change `install.ps1` / clone yourself):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -ReleaseTag v1.0.0"
+```
+
+Then install OpenVINO GenAI, add a model under `models\`, and run `.\portable_setup.ps1` or `.\start_app.ps1` from the install folder.
+
 ## What This Project Does
 
 - Loads OpenVINO GenAI LLMs from folders like `./models/Qwen2.5-0.5B-Instruct`
