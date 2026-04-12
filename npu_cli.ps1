@@ -15,7 +15,9 @@
 
 param(
     [string]$ApiBase = "http://localhost:8000",
-    [string]$Prompt  = ""
+    [string]$Prompt  = "",
+    [string]$Command = "",
+    [string[]]$Arguments = @()
 )
 
 $ErrorActionPreference = "Continue"
@@ -43,6 +45,178 @@ function Get-ApiErrorMessage {
     return "$Exception"
 }
 
+function Get-ScriptDir {
+    if ($PSScriptRoot) { return $PSScriptRoot }
+    if ($MyInvocation -and $MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) {
+        return Split-Path -Parent $MyInvocation.MyCommand.Path
+    }
+    return (Get-Location).ProviderPath
+}
+
+function Read-JsonFile {
+    param(
+        [string]$Path,
+        [object]$Default = $null
+    )
+    if (-not (Test-Path $Path)) {
+        return $Default
+    }
+    try {
+        return Get-Content -Path $Path -Raw | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        return $Default
+    }
+}
+
+function Write-JsonFile {
+    param(
+        [string]$Path,
+        [object]$Data
+    )
+    $Data | ConvertTo-Json -Depth 10 | Set-Content -Path $Path -Encoding UTF8
+}
+
+function Download-Model {
+    param(
+        [string]$Repo,
+        [string]$ModelId,
+        [string]$FileName = ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Repo)) {
+        throw "Model repo is required for download"
+    }
+    if ([string]::IsNullOrWhiteSpace($ModelId)) {
+        $ModelId = ($Repo -split "/")[-1]
+    }
+
+    $scriptDir = Get-ScriptDir
+    $modelsRoot = Join-Path $scriptDir "models"
+    $target = Join-Path $modelsRoot $ModelId
+    if (-not (Test-Path $target)) {
+        New-Item -ItemType Directory -Path $target -Force | Out-Null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($FileName)) {
+        Write-Host "Downloading model '$Repo' into '$target'..." -ForegroundColor Cyan
+    } else {
+        Write-Host "Downloading model file '$FileName' from '$Repo' into '$target'..." -ForegroundColor Cyan
+    }
+
+    $hfCmd = Get-Command hf -ErrorAction SilentlyContinue
+    if ($hfCmd) {
+        $env:PYTHONIOENCODING = 'utf-8'
+        if ([string]::IsNullOrWhiteSpace($FileName)) {
+            & $hfCmd.Source download $Repo --local-dir "$target"
+        } else {
+            & $hfCmd.Source download $Repo $FileName --local-dir "$target"
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw "hf download failed with exit code $LASTEXITCODE"
+        }
+        return $ModelId
+    }
+
+    $hfCli = Get-Command huggingface-cli -ErrorAction SilentlyContinue
+    if ($hfCli) {
+        $env:PYTHONIOENCODING = 'utf-8'
+        if ([string]::IsNullOrWhiteSpace($FileName)) {
+            & $hfCli.Source download $Repo --local-dir "$target"
+        } else {
+            & $hfCli.Source download $Repo $FileName --local-dir "$target"
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw "huggingface-cli download failed with exit code $LASTEXITCODE"
+        }
+        return $ModelId
+    }
+
+    $gitCmd = Get-Command git -ErrorAction SilentlyContinue
+    if (-not $gitCmd) {
+        throw "Neither huggingface-cli nor git is available. Install one of them to download model files."
+    }
+
+    if (Test-Path (Join-Path $target ".git")) {
+        Push-Location $target
+        git pull
+        Pop-Location
+    } else {
+        if (Test-Path $target) {
+            Remove-Item -Recurse -Force $target
+        }
+        git clone "https://huggingface.co/$Repo" $target
+    }
+
+    return $ModelId
+}
+
+function Process-Command {
+    param(
+        [string]$Command,
+        [string[]]$Arguments
+    )
+
+    switch ($Command.ToLower()) {
+        "model" {
+            if ($Arguments.Count -lt 1) {
+                Write-Err "model command requires a subcommand: download, list, import, select, rename"
+                return 1
+            }
+            $sub = $Arguments[0].ToLower()
+            switch ($sub) {
+                "download" {
+                    if ($Arguments.Count -lt 2) {
+                        Write-Err "Usage: -Command model -Arguments \"download\",\"<huggingface_repo>\",\"<local-id>\",\"[filename]\""
+                        Write-Err "  filename is optional - if omitted, all files are downloaded"
+                        return 1
+                    }
+                    $repo = $Arguments[1]
+                    $id = if ($Arguments.Count -ge 3) { $Arguments[2] } else { "" }
+                    $file = if ($Arguments.Count -ge 4) { $Arguments[3] } else { "" }
+                    $downloadedId = Download-Model -Repo $repo -ModelId $id -FileName $file
+                    Write-Success "Downloaded model '$repo' to './models/$downloadedId'"
+                    return 0
+                }
+                "list" {
+                    $scriptDir = Get-ScriptDir
+                    $modelsPath = Join-Path $scriptDir "registry\models_registry.json"
+                    $registry = Read-JsonFile -Path $modelsPath -Default ([ordered]@{ models = @(); selected_model = "" })
+                    foreach ($model in $registry.models) {
+                        Write-Host "$($model.id) -> $($model.path) ($($model.format))"
+                    }
+                    return 0
+                }
+                "rename" {
+                    if ($Arguments.Count -lt 3) {
+                        Write-Err "Usage: -Command model -Arguments \"rename\",\"<from-id>\",\"<to-id>\""
+                        return 1
+                    }
+                    try {
+                        $resp = Invoke-Api "/v1/cli/model/rename" -Method "POST" -Body @{
+                            from_id = $Arguments[1].Trim()
+                            to_id   = $Arguments[2].Trim()
+                        }
+                        Write-Success "Renamed model id '$($resp.from_id)' -> '$($resp.to_id)'"
+                        if ($resp.note) { Write-Info $resp.note }
+                        return 0
+                    } catch {
+                        Write-Err (Get-ApiErrorMessage -Exception $_)
+                        return 1
+                    }
+                }
+                default {
+                    Write-Err "Unknown model subcommand '$sub'"
+                    return 1
+                }
+            }
+        }
+        default {
+            Write-Err "Unknown command '$Command'"
+            return 1
+        }
+    }
+}
+
 function Invoke-Api {
     param(
         [string]$Path,
@@ -56,6 +230,11 @@ function Invoke-Api {
         $params.Body    = if ($Body -is [string]) { $Body } else { $Body | ConvertTo-Json -Depth 8 -Compress }
     }
     return Invoke-RestMethod @params
+}
+
+if (-not [string]::IsNullOrWhiteSpace($Command)) {
+    $exitCode = Process-Command -Command $Command -Arguments $Arguments
+    exit $exitCode
 }
 
 # ---------------------------------------------------------------------------
@@ -74,8 +253,8 @@ function Show-RuntimeBanner {
         Write-Info "  Loaded   :  $loaded"
         Write-Info "  Control  :  http://localhost:5173"
         Write-Info ""
-        Write-Dim  "  Type your message and press Enter. Type 'exit' to quit."
-        Write-Dim  "  Type 'status' to see current device / model / metrics."
+        Write-Dim  "  Type your message and press Enter. Type '/exit' to quit."
+        Write-Dim  "  Type '/status' to see current device / model / metrics."
         Write-Info ""
     } catch {
         Write-Dim "  (backend not reachable — start with .\start_app.ps1)"
@@ -169,7 +348,9 @@ function Send-ChatMessage {
 
 function Handle-InlineCommand {
     param([string]$Input)
-    switch ($Input.Trim().ToLower()) {
+    $command = $Input.Trim().ToLower().TrimStart([char[]]('/','\'))
+
+    switch ($command) {
         "status" {
             try {
                 $s = Invoke-Api "/v1/cli/status"
@@ -186,15 +367,6 @@ function Handle-InlineCommand {
             } catch { Write-Err "Could not reach backend." }
             return $true
         }
-        "help" {
-            Write-Info ""
-            Write-Dim  "  Just type to chat. Special words:"
-            Write-Dim  "    status  — current device, policy, model, metrics"
-            Write-Dim  "    exit    — quit"
-            Write-Dim  "  All other settings live in the browser control panel."
-            Write-Info ""
-            return $true
-        }
         default { return $false }
     }
 }
@@ -206,7 +378,7 @@ function Handle-InlineCommand {
 function Start-ChatLoop {
     param([string]$InitialPrompt = "")
 
-    Write-Info "NPU Chat"
+    Write-Info "Chat"
     Show-RuntimeBanner
 
     # If a prompt was passed on the command line, send it first
@@ -223,7 +395,8 @@ function Start-ChatLoop {
         }
 
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
-        if ($line.Trim().ToLower() -eq "exit") { break }
+        $command = $line.Trim().ToLower().TrimStart([char[]]('/','\'))
+        if ($command -eq "exit") { break }
 
         if (-not (Handle-InlineCommand -Input $line)) {
             Send-ChatMessage -UserPrompt $line
