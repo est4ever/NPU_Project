@@ -25,20 +25,78 @@
 
 using json = nlohmann::json;
 
+namespace {
+std::filesystem::path detect_project_root() {
+    try {
+        char exe_path[MAX_PATH]{};
+        const DWORD len = GetModuleFileNameA(nullptr, exe_path, static_cast<DWORD>(sizeof(exe_path)));
+        if (len > 0 && len < sizeof(exe_path)) {
+            const std::filesystem::path exe_dir = std::filesystem::path(std::string(exe_path)).parent_path();
+            std::vector<std::filesystem::path> candidates = {
+                exe_dir,
+                exe_dir.parent_path(),
+                exe_dir.parent_path().parent_path()
+            };
+            for (const auto& candidate : candidates) {
+                if (candidate.empty()) {
+                    continue;
+                }
+                std::error_code ec;
+                if (std::filesystem::exists(candidate / "run.ps1", ec) ||
+                    std::filesystem::exists(candidate / "registry", ec)) {
+                    return candidate;
+                }
+            }
+        }
+    } catch (...) {
+        // Fall back to current working directory.
+    }
+    return std::filesystem::current_path();
+}
+
+const std::filesystem::path& project_root_path() {
+    static const std::filesystem::path root = detect_project_root();
+    return root;
+}
+
+const std::filesystem::path& registry_dir_path() {
+    static const std::filesystem::path dir = project_root_path() / "registry";
+    return dir;
+}
+
+const std::filesystem::path& models_registry_path() {
+    static const std::filesystem::path path = registry_dir_path() / "models_registry.json";
+    return path;
+}
+
+const std::filesystem::path& backends_registry_path() {
+    static const std::filesystem::path path = registry_dir_path() / "backends_registry.json";
+    return path;
+}
+
+const std::filesystem::path& launch_state_path() {
+    static const std::filesystem::path path = registry_dir_path() / "npu_launch_state.json";
+    return path;
+}
+
+const std::filesystem::path& restart_script_path() {
+    static const std::filesystem::path path = project_root_path() / "restart_backend.ps1";
+    return path;
+}
+}
+
 void save_npu_launch_state(int argc, char** argv) {
     try {
-        std::filesystem::create_directories("./registry");
+        std::filesystem::create_directories(registry_dir_path());
         json argv_json = json::array();
         for (int i = 1; i < argc; ++i) {
             argv_json.push_back(argv[i] ? std::string(argv[i]) : std::string());
         }
-        char cwd_buf[MAX_PATH]{};
-        const DWORD n = GetCurrentDirectoryA(static_cast<DWORD>(sizeof(cwd_buf)), cwd_buf);
         json doc = json::object();
         doc["argv"] = argv_json;
-        doc["project_root"] = (n > 0 && n < sizeof(cwd_buf)) ? std::string(cwd_buf) : std::string(".");
+        doc["project_root"] = project_root_path().string();
         doc["backend_pid"] = static_cast<int>(GetCurrentProcessId());
-        std::ofstream f("./registry/npu_launch_state.json");
+        std::ofstream f(launch_state_path());
         f << doc.dump(2);
     } catch (...) {
     }
@@ -51,9 +109,6 @@ RestAPIServer::RestAPIServer(BackendPool* pool, RuntimeConfig* config, int port)
     : RestAPIServer(pool, config, nullptr, port) {}
 
 namespace {
-const char* kRegistryDir = "./registry";
-const char* kModelsRegistryPath = "./registry/models_registry.json";
-const char* kBackendsRegistryPath = "./registry/backends_registry.json";
 std::mutex g_metrics_file_mutex;
 std::atomic<int> g_active_chat_requests{0};
 
@@ -134,7 +189,7 @@ void set_error_response(
 
 void ensure_registry_dir() {
     std::error_code ec;
-    std::filesystem::create_directories(kRegistryDir, ec);
+    std::filesystem::create_directories(registry_dir_path(), ec);
 }
 
 json default_models_registry() {
@@ -169,14 +224,65 @@ json default_backends_registry() {
     };
 }
 
+std::string utf16le_to_utf8(const std::string& raw) {
+    if (raw.size() < 2 || (raw.size() % 2) != 0) {
+        return "";
+    }
+    std::wstring wide;
+    wide.reserve(raw.size() / 2);
+    for (size_t i = 0; i + 1 < raw.size(); i += 2) {
+        const unsigned char lo = static_cast<unsigned char>(raw[i]);
+        const unsigned char hi = static_cast<unsigned char>(raw[i + 1]);
+        wide.push_back(static_cast<wchar_t>((hi << 8) | lo));
+    }
+    if (!wide.empty() && wide.front() == 0xFEFF) {
+        wide.erase(wide.begin());
+    }
+    if (wide.empty()) {
+        return "";
+    }
+    const int needed = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+    if (needed <= 0) {
+        return "";
+    }
+    std::string out(static_cast<size_t>(needed), '\0');
+    const int written = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), out.data(), needed, nullptr, nullptr);
+    if (written <= 0) {
+        return "";
+    }
+    return out;
+}
+
+json parse_registry_text(const std::string& raw) {
+    if (raw.empty()) {
+        throw std::runtime_error("empty_registry");
+    }
+    std::string text = raw;
+    if (text.size() >= 3 &&
+        static_cast<unsigned char>(text[0]) == 0xEF &&
+        static_cast<unsigned char>(text[1]) == 0xBB &&
+        static_cast<unsigned char>(text[2]) == 0xBF) {
+        text.erase(0, 3);
+    } else if (text.size() >= 2 &&
+               static_cast<unsigned char>(text[0]) == 0xFF &&
+               static_cast<unsigned char>(text[1]) == 0xFE) {
+        const std::string utf8 = utf16le_to_utf8(text);
+        if (!utf8.empty()) {
+            text = utf8;
+        }
+    }
+    return json::parse(text);
+}
+
 json load_registry(const std::string& path, const json& defaults) {
     ensure_registry_dir();
-    std::ifstream in(path);
+    std::ifstream in(path, std::ios::binary);
     if (!in.is_open()) {
         return defaults;
     }
     try {
-        return json::parse(in);
+        const std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        return parse_registry_text(raw);
     } catch (...) {
         return defaults;
     }
@@ -184,12 +290,26 @@ json load_registry(const std::string& path, const json& defaults) {
 
 void save_registry(const std::string& path, const json& data) {
     ensure_registry_dir();
+    try {
+        if (std::filesystem::exists(path)) {
+            const std::string backup_path = path + ".bak";
+            std::error_code copy_ec;
+            std::filesystem::copy_file(
+                path,
+                backup_path,
+                std::filesystem::copy_options::overwrite_existing,
+                copy_ec
+            );
+        }
+    } catch (...) {
+        // Backup is best-effort; never block normal registry writes.
+    }
     std::ofstream out(path, std::ios::trunc);
     out << data.dump(2);
 }
 
 json load_models_registry() {
-    json reg = load_registry(kModelsRegistryPath, default_models_registry());
+    json reg = load_registry(models_registry_path().string(), default_models_registry());
     if (!reg.contains("models") || !reg["models"].is_array()) {
         reg["models"] = json::array();
     }
@@ -200,7 +320,7 @@ json load_models_registry() {
 }
 
 json load_backends_registry() {
-    json reg = load_registry(kBackendsRegistryPath, default_backends_registry());
+    json reg = load_registry(backends_registry_path().string(), default_backends_registry());
     if (!reg.contains("backends") || !reg["backends"].is_array()) {
         reg["backends"] = json::array();
     }
@@ -1443,7 +1563,6 @@ void RestAPIServer::handle_cli_memory(const httplib::Request& req, httplib::Resp
 void RestAPIServer::handle_cli_model_list(const httplib::Request& req, httplib::Response& res) {
     try {
         json models_reg = load_models_registry();
-        save_registry(kModelsRegistryPath, models_reg);
         set_json_response(res, models_reg);
     } catch (const std::exception& e) {
         set_error_response(
@@ -1503,7 +1622,7 @@ void RestAPIServer::handle_cli_model_import(const httplib::Request& req, httplib
             models_reg["selected_model"] = id;
         }
 
-        save_registry(kModelsRegistryPath, models_reg);
+        save_registry(models_registry_path().string(), models_reg);
 
         json body_out = {
             {"success", true},
@@ -1553,7 +1672,7 @@ void RestAPIServer::handle_cli_model_select(const httplib::Request& req, httplib
         }
 
         models_reg["selected_model"] = id;
-        save_registry(kModelsRegistryPath, models_reg);
+        save_registry(models_registry_path().string(), models_reg);
 
         const std::string fmt = registry_model_format(models_reg["models"], id);
         json body_out = {
@@ -1641,7 +1760,7 @@ void RestAPIServer::handle_cli_model_rename(const httplib::Request& req, httplib
             models_reg["selected_model"] = to_id;
         }
 
-        save_registry(kModelsRegistryPath, models_reg);
+        save_registry(models_registry_path().string(), models_reg);
         set_json_response(res, json({
             {"success", true},
             {"from_id", from_id},
@@ -1671,7 +1790,6 @@ void RestAPIServer::handle_cli_model_rename(const httplib::Request& req, httplib
 void RestAPIServer::handle_cli_backend_list(const httplib::Request& req, httplib::Response& res) {
     try {
         json backends_reg = load_backends_registry();
-        save_registry(kBackendsRegistryPath, backends_reg);
         set_json_response(res, backends_reg);
     } catch (const std::exception& e) {
         set_error_response(
@@ -1727,7 +1845,7 @@ void RestAPIServer::handle_cli_backend_add(const httplib::Request& req, httplib:
             });
         }
 
-        save_registry(kBackendsRegistryPath, backends_reg);
+        save_registry(backends_registry_path().string(), backends_reg);
         set_json_response(res, json({
             {"success", true},
             {"updated", updated},
@@ -1768,7 +1886,7 @@ void RestAPIServer::handle_cli_backend_select(const httplib::Request& req, httpl
         }
 
         backends_reg["selected_backend"] = id;
-        save_registry(kBackendsRegistryPath, backends_reg);
+        save_registry(backends_registry_path().string(), backends_reg);
         set_json_response(res, json({
             {"success", true},
             {"selected_backend", id},
@@ -1795,7 +1913,7 @@ void RestAPIServer::handle_cli_backend_select(const httplib::Request& req, httpl
 
 void RestAPIServer::handle_cli_backend_restart(const httplib::Request&, httplib::Response& res) {
     try {
-        if (!std::filesystem::exists("./registry/npu_launch_state.json")) {
+        if (!std::filesystem::exists(launch_state_path())) {
             set_error_response(
                 res,
                 400,
@@ -1804,7 +1922,7 @@ void RestAPIServer::handle_cli_backend_restart(const httplib::Request&, httplib:
             );
             return;
         }
-        if (!std::filesystem::exists("./restart_backend.ps1")) {
+        if (!std::filesystem::exists(restart_script_path())) {
             set_error_response(
                 res,
                 500,
@@ -1813,15 +1931,8 @@ void RestAPIServer::handle_cli_backend_restart(const httplib::Request&, httplib:
             );
             return;
         }
-
-        char cwd_buf[MAX_PATH]{};
-        const DWORD n = GetCurrentDirectoryA(static_cast<DWORD>(sizeof(cwd_buf)), cwd_buf);
-        if (n == 0 || n >= sizeof(cwd_buf)) {
-            set_error_response(res, 500, "cwd_unavailable", "Could not read current directory");
-            return;
-        }
-        const std::string root(cwd_buf);
-        const std::string script = root + "\\restart_backend.ps1";
+        const std::string root = project_root_path().string();
+        const std::string script = restart_script_path().string();
 
         set_json_response(res, json({
             {"success", true},

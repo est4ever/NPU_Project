@@ -4,6 +4,9 @@
 # Builtin OpenVINO backends load setupvars.bat first; external backends run the entrypoint as-is.
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# Keep backend runtime paths stable (registries, metrics, launch state)
+# regardless of where run.ps1 is invoked from.
+Set-Location -LiteralPath $scriptDir
 
 function Find-OpenVINOSetupVars {
     if ($env:OPENVINO_GENAI_DIR) {
