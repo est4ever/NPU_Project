@@ -6,6 +6,7 @@ REM Usage: run.bat ./models/Qwen2.5-0.5B-Instruct --policy PERFORMANCE
 
 REM Get the directory where this script is located
 set SCRIPT_DIR=%~dp0
+cd /d "%SCRIPT_DIR%"
 
 REM Setup OpenVINO environment
 echo [Setup] Loading OpenVINO environment...
