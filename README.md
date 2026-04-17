@@ -7,9 +7,29 @@ Loomis is a local AI control plane for Windows:
 
 You can run Loomis with the built-in OpenVINO backend (`npu_wrapper`) or an external backend that supports the same API.
 
+## User Prerequisites
+
+### Hardware
+
+- Windows 10/11 x64 machine
+- CPU required
+- Intel GPU/NPU optional (for accelerator paths with built-in backend)
+- Enough RAM for your selected model size
+
+### Software
+
+- [Git for Windows](https://git-scm.com/download/win) (required for installer/clone flows)
+- PowerShell (built into Windows)
+- Optional: updated Intel GPU/NPU drivers when using accelerator devices
+
+### What Loomis Does Not Bundle
+
+- Model weights are not included in this repo
+- External backends are not included (you provide them)
+
 ## New Computer Setup (3 Download Paths)
 
-### Path A - Full install (recommended)
+### Path A - App shell + bundled built-in runtime (recommended)
 
 1. Install [Git for Windows](https://git-scm.com/download/win)
 2. Run:
@@ -25,6 +45,11 @@ cd $env:USERPROFILE\Loomis
 .\portable_setup.ps1
 ```
 
+What this means:
+- Installs Loomis app shell + downloads the prebuilt runtime bundle from GitHub Releases
+- Typically **no separate OpenVINO SDK install is required** for end users in this path
+- Intel drivers are still recommended if you plan to use Intel GPU/NPU acceleration
+
 ### Path B - Shell-only install (external backend users)
 
 ```powershell
@@ -32,6 +57,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create
 ```
 
 Then configure `registry\backends_registry.json` (`type: "external"`, valid `entrypoint`) and run `.\start_app.ps1`.
+
+What this means:
+- Installs only the Loomis shell/control plane
+- You bring your own backend/runtime
+- No OpenVINO install is needed unless your chosen backend requires it
 
 ### Path C - Manual source download
 
@@ -41,6 +71,11 @@ Then configure `registry\backends_registry.json` (`type: "external"`, valid `ent
    - External backend: configure `registry\backends_registry.json` with `type: "external"` and your `entrypoint`
 3. Initialize with `.\portable_setup.ps1` (or copy `registry/*.example.json` to `registry/*.json`)
 4. Launch with `.\start_app.ps1`
+
+What this means:
+- Most flexible path (you assemble runtime/backends yourself)
+- If you use the built-in backend from source, developer dependencies may be required
+- If you use external backend only, OpenVINO is optional (depends on that backend)
 
 ### Optional installer flags
 
@@ -120,10 +155,22 @@ On fresh clone, either run `.\portable_setup.ps1` or copy:
 
 These machine-specific `registry/*.json` files are intentionally not tracked in git.
 
+Where users define runtime content:
+- **Models:** `registry/models_registry.json` (model ids + paths)
+- **Backends:** `registry/backends_registry.json` (backend ids + entrypoints)
+
+Template files included:
+- `registry/models_registry.example.json`
+- `registry/backends_registry.example.json`
+
 ## Built-in vs External Backend
 
 - `builtin`: usually `dist/npu_wrapper.exe`; `run.ps1` prepares OpenVINO env.
 - `external`: your own executable/script; must provide Loomis API endpoints used by app shell and CLI.
+
+Where backends come from:
+- Built-in backend runtime is delivered by the release zip (`loomis-dist-windows-x64.zip`)
+- External backend is user-supplied and registered in `registry/backends_registry.json`
 
 ## Model Notes
 
@@ -131,6 +178,10 @@ These machine-specific `registry/*.json` files are intentionally not tracked in 
 - Built-in backend requires OpenVINO IR model folders (contain `.xml` + weights).
 - GGUF entries may be tracked in registry, but are not directly runnable by `npu_wrapper` until converted/exported to IR.
 - If `selected_model` points to a non-IR folder, `start_app.ps1` may fall back to another runnable IR path.
+
+Where models come from:
+- Hugging Face model hub (or internal model storage)
+- For built-in backend, convert/export to OpenVINO IR before selecting in registry/app shell
 
 ## Troubleshooting
 
