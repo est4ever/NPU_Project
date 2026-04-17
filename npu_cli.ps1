@@ -382,16 +382,10 @@ function Handle-InlineCommand {
         "status" {
             try {
                 $s = Invoke-Api "/v1/cli/status"
-                Write-Info ""
-                Write-Info "  Device   :  $($s.active_device)"
-                Write-Info "  Policy   :  $($s.policy)"
-                Write-Info "  Model    :  $($s.selected_model)"
-                Write-Info "  Loaded   :  $($s.devices -join ', ')"
-                if ($s.ttft_ms     -and [double]$s.ttft_ms     -gt 0) { Write-Info "  TTFT     :  $($s.ttft_ms) ms" }
-                if ($s.throughput  -and [double]$s.throughput  -gt 0) { Write-Info "  TPS      :  $($s.throughput) tok/s" }
-                Write-Info ""
-                Write-Dim  "  Change device / policy / model at http://localhost:5173"
-                Write-Info ""
+                $device = if ($s.active_device) { $s.active_device } else { "-" }
+                $policy = if ($s.policy) { $s.policy } else { "-" }
+                $model  = if ($s.selected_model) { $s.selected_model } else { "-" }
+                Write-Info "status: device=$device policy=$policy model=$model"
             } catch {
                 Write-Err "Could not reach backend."
                 Write-BackendUnreachableHint

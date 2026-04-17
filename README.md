@@ -7,9 +7,9 @@ Loomis is a local AI control plane for Windows:
 
 You can run Loomis with the built-in OpenVINO backend (`npu_wrapper`) or an external backend that supports the same API.
 
-## New Computer Setup
+## New Computer Setup (3 Download Paths)
 
-### Default install (recommended)
+### Path A - Full install (recommended)
 
 1. Install [Git for Windows](https://git-scm.com/download/win)
 2. Run:
@@ -25,13 +25,36 @@ cd $env:USERPROFILE\Loomis
 .\portable_setup.ps1
 ```
 
-### Shell-only install (external backend users)
+### Path B - Shell-only install (external backend users)
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -ShellOnly"
 ```
 
 Then configure `registry\backends_registry.json` (`type: "external"`, valid `entrypoint`) and run `.\start_app.ps1`.
+
+### Path C - Manual source download
+
+1. Clone or download this repository.
+2. Choose one:
+   - Reference backend runtime: put `npu_wrapper.exe` + DLLs under `dist\`
+   - External backend: configure `registry\backends_registry.json` with `type: "external"` and your `entrypoint`
+3. Initialize with `.\portable_setup.ps1` (or copy `registry/*.example.json` to `registry/*.json`)
+4. Launch with `.\start_app.ps1`
+
+### Optional installer flags
+
+Custom install folder:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -InstallDir 'D:\AI\Loomis'"
+```
+
+Pin a specific release tag:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -ReleaseTag v1.0.0"
+```
 
 ### If scripts are blocked
 
@@ -47,6 +70,8 @@ Start stack:
 .\start_app.ps1
 ```
 
+`start_app.ps1` is the primary launcher for users (backend + app shell).
+
 - App shell: `http://localhost:5173`
 - API base (default): `http://localhost:8000/v1`
 
@@ -56,21 +81,17 @@ Chat from terminal:
 .\npu_cli.ps1
 ```
 
+Interactive chat commands are intentionally minimal:
+- `/status`
+- `/exit`
+
 One-shot chat:
 
 ```powershell
 .\npu_cli.ps1 -Command chat -Arguments "hello"
 ```
 
-Useful runtime controls:
-
-```powershell
-.\npu_cli.ps1 -Command status
-.\npu_cli.ps1 -Command switch -Arguments "GPU"
-.\npu_cli.ps1 -Command policy -Arguments "PERFORMANCE"
-.\npu_cli.ps1 -Command load -Arguments "NPU"
-.\npu_cli.ps1 -Command metrics -Arguments "last"
-```
+Runtime control (device, policy, feature toggles, registry selection) is browser-first in `start_app.ps1` flow, via the app shell.
 
 ## Release Asset (for installer)
 
@@ -84,6 +105,8 @@ Create/update from repo root:
 ```powershell
 Compress-Archive -Path (Join-Path $PWD 'dist\*') -DestinationPath loomis-dist-windows-x64.zip -Force
 ```
+
+Important: zip the contents of `dist\` directly at the archive root (not `dist\dist\...`).
 
 ## Persistence and Registries
 
@@ -107,6 +130,7 @@ These machine-specific `registry/*.json` files are intentionally not tracked in 
 - This repository does not ship model weights.
 - Built-in backend requires OpenVINO IR model folders (contain `.xml` + weights).
 - GGUF entries may be tracked in registry, but are not directly runnable by `npu_wrapper` until converted/exported to IR.
+- If `selected_model` points to a non-IR folder, `start_app.ps1` may fall back to another runnable IR path.
 
 ## Troubleshooting
 
@@ -117,6 +141,7 @@ These machine-specific `registry/*.json` files are intentionally not tracked in 
   - Wait a few seconds (backend may be restarting), then retry.
   - Start stack again with `.\start_app.ps1`.
   - Check backend terminal output for bad entrypoint/path/runtime failures.
+  - In interactive terminal mode, use `/status` and `/exit` only.
 
 - **Built-in backend fails to start**
   - Confirm `dist/npu_wrapper.exe` exists.
@@ -139,6 +164,8 @@ These machine-specific `registry/*.json` files are intentionally not tracked in 
 - **Repository:** source, scripts, docs, `app_shell`, `registry/*.example.json`
 - **Releases:** optional runtime bundle zip (`loomis-dist-windows-x64.zip`)
 - **Do not commit:** machine-specific `registry/*.json`, model files, build outputs
+
+Release zips are for end users of the built-in backend; external-backend users can install with `-ShellOnly` and skip runtime zip distribution.
 
 ## License
 
