@@ -71,7 +71,8 @@ function Ensure-LoomisCommandInProfile {
         $escapedRoot = $ProjectRoot.Replace("'", "''")
         $startMarker = "# >>> Loomis command >>>"
         $endMarker = "# <<< Loomis command <<<"
-        $block = @"
+        # Split here-strings: a nested @"..."@ inside the profile $block would close the outer @" prematurely.
+        $blockPart1 = @"
 $startMarker
 function Loomis {
     param([Parameter(ValueFromRemainingArguments = `$true)][string[]]`$Args)
@@ -92,39 +93,44 @@ function Ensure-LoomisGlobalCommand {
     param([string]$ProjectRoot)
 
     try {
-        $binDir = Join-Path $HOME ".local\bin"
-        if (-not (Test-Path -LiteralPath $binDir)) {
-            New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+        `$binDir = Join-Path `$HOME ".local\bin"
+        if (-not (Test-Path -LiteralPath `$binDir)) {
+            New-Item -ItemType Directory -Path `$binDir -Force | Out-Null
         }
 
-        $cmdPath = Join-Path $binDir "loomis.cmd"
+        `$cmdPath = Join-Path `$binDir "loomis.cmd"
+"@
+        $blockPart2 = @'
         $cmdBody = @"
 @echo off
 setlocal
 powershell -NoProfile -ExecutionPolicy Bypass -File "$ProjectRoot\loomis.ps1" %*
 "@
-        Set-Content -LiteralPath $cmdPath -Value $cmdBody -Encoding ASCII
+'@
+        $blockPart3 = @"
+        Set-Content -LiteralPath `$cmdPath -Value `$cmdBody -Encoding ASCII
 
-        $userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
-        if ($null -eq $userPath) { $userPath = "" }
-        $parts = @($userPath -split ";" | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        if (-not ($parts -contains $binDir)) {
-            $newPath = if ([string]::IsNullOrWhiteSpace($userPath)) { $binDir } else { "$userPath;$binDir" }
-            [Environment]::SetEnvironmentVariable("Path", $newPath, [EnvironmentVariableTarget]::User)
-            if ($env:Path -notlike "*$binDir*") {
-                $env:Path = "$env:Path;$binDir"
+        `$userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
+        if (`$null -eq `$userPath) { `$userPath = "" }
+        `$parts = @(`$userPath -split ";" | ForEach-Object { `$_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace(`$_) })
+        if (-not (`$parts -contains `$binDir)) {
+            `$newPath = if ([string]::IsNullOrWhiteSpace(`$userPath)) { `$binDir } else { "`$userPath;`$binDir" }
+            [Environment]::SetEnvironmentVariable("Path", `$newPath, [EnvironmentVariableTarget]::User)
+            if (`$env:Path -notlike "*`$binDir*") {
+                `$env:Path = "`$env:Path;`$binDir"
             }
-            Write-Host "[Setup] Added $binDir to user PATH." -ForegroundColor Green
+            Write-Host "[Setup] Added `$binDir to user PATH." -ForegroundColor Green
         }
 
-        Write-Host "[Setup] Installed global 'loomis' command: $cmdPath" -ForegroundColor Green
+        Write-Host "[Setup] Installed global 'loomis' command: `$cmdPath" -ForegroundColor Green
     } catch {
-        Write-Host "[Setup] Could not install global 'loomis' command: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host ('[Setup] Could not install global ''loomis'' command: ' + `$_.Exception.Message) -ForegroundColor Yellow
     }
 }
 Set-Alias -Name loomis -Value Loomis -Scope Global
 $endMarker
 "@
+        $block = $blockPart1 + $blockPart2 + $blockPart3
 
         $content = Get-Content -LiteralPath $PROFILE -Raw -ErrorAction SilentlyContinue
         if ($null -eq $content) { $content = "" }
