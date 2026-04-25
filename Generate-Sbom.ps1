@@ -12,7 +12,7 @@ if (-not (Test-Path -LiteralPath $outDir)) {
 $dist = Join-Path $ProjectRoot "dist"
 $out = Join-Path $outDir ("dist-sbom-" + (Get-Date -Format "yyyyMMdd") + ".txt")
 $lines = @(
-    "# Loomis dist/ file inventory (SBOM-style list of shipped binaries)",
+    "# AcouLM dist/ file inventory (SBOM-style list of shipped binaries)",
     "# Generated: $(Get-Date -Format o)",
     ""
 )

@@ -3,13 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Loomis</title>
-  <link rel="stylesheet" href="./styles.css?v=20260624e" />
+  <title>AcouLM</title>
+  <link rel="stylesheet" href="./styles.css?v=20260425c" />
 </head>
 <body>
   <header class="app-header glass">
     <div>
-      <h1>Loomis <span class="greeting">— Local AI, accelerated.</span></h1>
+      <h1>
+        <span class="loomis-word">AcouLM</span>
+        <span class="greeting">— Local AI, accelerated.</span>
+        <span class="pixel-robot" aria-hidden="true"><span class="pixel-robot-body"></span></span>
+      </h1>
       <p class="subhead">Local inference control plane. No models or backends are bundled—add what you use.</p>
     </div>
 
@@ -29,6 +33,10 @@
       <div id="connBadge" class="conn-badge checking">API: checking</div>
     </div>
   </header>
+  <div class="loomis-welcome">
+    <span class="loomis-pixel" aria-hidden="true">[=^.^=]</span>
+    <span class="loomis-welcome-text">Welcome to AcouLM - your local AI co-pilot is online.</span>
+  </div>
 
   <div class="readiness-bar" id="readinessBar">
     <span class="readiness-label">Runtime</span>
@@ -40,7 +48,7 @@
     <span class="readiness-chip" id="rSplitPrefill">split-prefill: -</span>
     <span class="readiness-chip" id="rContextRouting">context-routing: -</span>
     <span class="readiness-chip" id="rOptimizeMemory">optimize-memory: -</span>
-    <span class="readiness-chip" id="rLoomisMemory">loomis-mem: -</span>
+    <span class="readiness-chip" id="rLoomisMemory">acoulm-mem: -</span>
   </div>
   <nav class="workspace-tabs" aria-label="Primary Views">
     <button id="tabWorkspace" class="ghost active" type="button">Workspace</button>
@@ -227,7 +235,7 @@
         <p><strong>optimize-memory</strong>: reduce memory use via INT8 cache optimization.</p>
       </div>
       <div class="row">
-        <label title="When enabled, Loomis auto-picks the best registry model on next launcher start.">
+        <label title="When enabled, AcouLM auto-picks the best registry model on next launcher start.">
           <input id="autoModelSelectToggle" type="checkbox" />
           auto model select at launch
         </label>

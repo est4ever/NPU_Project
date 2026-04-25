@@ -1,4 +1,4 @@
-# Loomis — remote installer (OpenClaw-style one-liner target)
+# AcouLM — remote installer (OpenClaw-style one-liner target)
 # Usage (from README):
 #   Default: clone + download reference npu_wrapper zip from Releases.
 #   Shell only: ... install.ps1')))" -ShellOnly   (external backend / no OpenVINO binary)
@@ -33,7 +33,7 @@ function Get-DistDownloadUrl {
     return "https://github.com/$RepoPath/releases/download/$TagNorm/$Asset"
 }
 
-Write-Host "Loomis install" -ForegroundColor Cyan
+Write-Host "AcouLM install" -ForegroundColor Cyan
 Write-Host "  Install dir   : $InstallDir"
 Write-Host "  Source branch : $Branch"
 Write-Host "  Mode          : $(if ($ShellOnly) { 'shell only (no reference binary zip)' } else { 'clone + reference dist zip' })"

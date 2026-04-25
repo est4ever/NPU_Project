@@ -47,6 +47,38 @@ body {
   gap: 12px;
 }
 
+.loomis-welcome {
+  margin: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-strong) 92%, #ffffff);
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.loomis-pixel {
+  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-size: 0.88rem;
+  padding: 3px 8px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--brand) 38%, white);
+  background: color-mix(in srgb, var(--brand-2) 18%, white);
+  color: color-mix(in srgb, var(--brand) 82%, black);
+  animation: loomisBlink 2.2s ease-in-out infinite;
+}
+
+.loomis-welcome-text {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+@keyframes loomisBlink {
+  0%, 100% { transform: translateY(0); opacity: 1; }
+  50% { transform: translateY(-1px); opacity: 0.88; }
+}
+
 h1, h2, h3 {
   margin: 0;
 }
@@ -54,6 +86,20 @@ h1, h2, h3 {
 h1 {
   font-size: 1.2rem;
   letter-spacing: 0.01em;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  line-height: 1.15;
+}
+
+.loomis-word {
+  display: inline-block;
+  line-height: 1;
+}
+
+.greeting {
+  display: inline-block;
+  line-height: 1.1;
 }
 
 h2 {
@@ -70,6 +116,75 @@ h3 {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 0.85rem;
+}
+
+.pixel-robot {
+  display: inline-block;
+  width: 34px;
+  height: 34px;
+  position: relative;
+  margin-left: 4px;
+  transform-origin: 50% 85%;
+  animation: robotDance 1.05s steps(2, end) infinite;
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.2));
+}
+
+.pixel-robot-body {
+  width: 3px;
+  height: 3px;
+  margin: 10px 0 0 12px;
+  background: #f29a7a;
+  box-shadow:
+    /* head */
+    -6px -9px 0 #f29a7a, -3px -9px 0 #f29a7a, 0 -9px 0 #f29a7a, 3px -9px 0 #f29a7a, 6px -9px 0 #f29a7a,
+    -6px -6px 0 #f29a7a, -3px -6px 0 #24181a, 0 -6px 0 #f29a7a, 3px -6px 0 #24181a, 6px -6px 0 #f29a7a,
+    -6px -3px 0 #f29a7a, -3px -3px 0 #f29a7a, 0 -3px 0 #f29a7a, 3px -3px 0 #f29a7a, 6px -3px 0 #f29a7a,
+    /* torso */
+    -3px 0 0 #f29a7a, 0 0 0 #f29a7a, 3px 0 0 #f29a7a,
+    -6px 3px 0 #f29a7a, -3px 3px 0 #f29a7a, 0 3px 0 #f29a7a, 3px 3px 0 #f29a7a, 6px 3px 0 #f29a7a,
+    /* legs */
+    -3px 6px 0 #f29a7a, 3px 6px 0 #f29a7a,
+    -3px 9px 0 #f29a7a, 3px 9px 0 #f29a7a;
+}
+
+.pixel-robot::before,
+.pixel-robot::after {
+  content: "";
+  position: absolute;
+  top: 12px;
+  width: 3px;
+  height: 3px;
+  background: #f29a7a;
+}
+
+.pixel-robot::before {
+  left: 4px;
+  box-shadow: 0 3px 0 #f29a7a;
+  animation: robotArmL 0.55s steps(2, end) infinite alternate;
+}
+
+.pixel-robot::after {
+  right: 4px;
+  box-shadow: 0 3px 0 #f29a7a;
+  animation: robotArmR 0.55s steps(2, end) infinite alternate-reverse;
+}
+
+@keyframes robotDance {
+  0% { transform: translateY(0) rotate(0deg); }
+  25% { transform: translateY(-1px) rotate(-4deg); }
+  50% { transform: translateY(0) rotate(0deg); }
+  75% { transform: translateY(-1px) rotate(4deg); }
+  100% { transform: translateY(0) rotate(0deg); }
+}
+
+@keyframes robotArmL {
+  from { transform: translateY(0); }
+  to { transform: translateY(-2px); }
+}
+
+@keyframes robotArmR {
+  from { transform: translateY(-2px); }
+  to { transform: translateY(0); }
 }
 
 .header-tools {

@@ -273,24 +273,54 @@ if (-not [string]::IsNullOrWhiteSpace($Command)) {
 # ---------------------------------------------------------------------------
 
 function Show-RuntimeBanner {
-    try {
-        $s = Invoke-Api "/v1/cli/status"
-        $device = if ($s.active_device)  { $s.active_device }  else { "?" }
-        $policy = if ($s.policy)         { $s.policy }         else { "?" }
-        $model  = if ($s.selected_model) { $s.selected_model } else { "?" }
-        $loaded = if ($s.devices)        { $s.devices -join ", " } else { "-" }
-        Write-Info ""
-        Write-Info "  Runtime  :  $device  |  $policy  |  $model"
-        Write-Info "  Loaded   :  $loaded"
-        Write-Info "  Control  :  http://localhost:5173"
-        Write-Info ""
-        Write-Dim  "  Type your message and press Enter. Type '/exit' to quit."
-        Write-Dim  "  Type '/status' to see current device / model / metrics."
-        Write-Info ""
-    } catch {
-        Write-Dim "  (backend not reachable — start with .\start_app.ps1)"
-        Write-Info ""
+    $s = $null
+    for ($i = 0; $i -lt 6; $i++) {
+        try {
+            $s = Invoke-Api "/v1/cli/status"
+            break
+        } catch {
+            Start-Sleep -Milliseconds 350
+        }
     }
+
+    if ($null -eq $s) {
+        Write-Dim  "  Runtime  :  starting... (chat will work as soon as backend is ready)"
+        Write-Dim  "  Control  :  http://localhost:5173"
+        Write-Info ""
+        return
+    }
+
+    $device = if ($s.active_device)  { $s.active_device }  else { "?" }
+    $policy = if ($s.policy)         { $s.policy }         else { "?" }
+    $model  = if ($s.selected_model) { $s.selected_model } else { "?" }
+    $loaded = if ($s.devices)        { $s.devices -join ", " } else { "-" }
+    Write-Info ""
+    Write-Info "  Runtime  :  $device  |  $policy  |  $model"
+    Write-Info "  Loaded   :  $loaded"
+    Write-Info "  Control  :  http://localhost:5173"
+    Write-Info ""
+    Write-Dim  "  Type your message and press Enter. Type '/exit' to quit."
+    Write-Dim  "  Type '/status' to see current device / model / metrics."
+    Write-Info ""
+}
+
+# ---------------------------------------------------------------------------
+# AcouLM splash (shown when chat starts)
+# ---------------------------------------------------------------------------
+
+function Show-AcouLMSplash {
+    $art = @(
+        "  _      ___   ___   __  __ ___ ___ ",
+        " | |    / _ \ / _ \ |  \/  |_ _/ __|",
+        " | |__ | (_) | (_) || |\/| || |\__ \",
+        " |____| \___/ \___/ |_|  |_|___|___/"
+    )
+    Write-Host ""
+    foreach ($line in $art) {
+        Write-Host $line -ForegroundColor Magenta
+    }
+    Write-Host "  (^-^) AcouLM local chat is ready" -ForegroundColor DarkMagenta
+    Write-Host ""
 }
 
 # ---------------------------------------------------------------------------
@@ -410,6 +440,7 @@ function Handle-InlineCommand {
 function Start-ChatLoop {
     param([string]$InitialPrompt = "")
 
+    Show-AcouLMSplash
     Write-Info "Chat"
     Show-RuntimeBanner
 

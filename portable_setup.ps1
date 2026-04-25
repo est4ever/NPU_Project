@@ -69,68 +69,31 @@ function Ensure-LoomisCommandInProfile {
         }
 
         $escapedRoot = $ProjectRoot.Replace("'", "''")
+        # Keep the marker stable so re-running setup updates the existing block.
         $startMarker = "# >>> Loomis command >>>"
         $endMarker = "# <<< Loomis command <<<"
-        # Split here-strings: a nested @"..."@ inside the profile $block would close the outer @" prematurely.
-        $blockPart1 = @"
+        $block = @"
 $startMarker
-function Loomis {
+function AcouLM {
     param([Parameter(ValueFromRemainingArguments = `$true)][string[]]`$Args)
-    `$loomisRoot = '$escapedRoot'
-    `$cli = Join-Path `$loomisRoot 'npu_cli.ps1'
-    if (-not (Test-Path -LiteralPath `$cli)) {
-        Write-Error "Loomis CLI not found at `$cli"
+    `$root = '$escapedRoot'
+    `$wrapper = Join-Path `$root 'acoulm.ps1'
+    if (-not (Test-Path -LiteralPath `$wrapper)) {
+        Write-Error "AcouLM launcher not found at `$wrapper"
         return
     }
-    if (`$Args -and `$Args.Count -gt 0) {
-        & `$cli @Args
-    } else {
-        & `$cli -Command chat
-    }
+    & `$wrapper @Args
 }
 
-function Ensure-LoomisGlobalCommand {
-    param([string]$ProjectRoot)
-
-    try {
-        `$binDir = Join-Path `$HOME ".local\bin"
-        if (-not (Test-Path -LiteralPath `$binDir)) {
-            New-Item -ItemType Directory -Path `$binDir -Force | Out-Null
-        }
-
-        `$cmdPath = Join-Path `$binDir "loomis.cmd"
-"@
-        $blockPart2 = @'
-        $cmdBody = @"
-@echo off
-setlocal
-powershell -NoProfile -ExecutionPolicy Bypass -File "$ProjectRoot\loomis.ps1" %*
-"@
-'@
-        $blockPart3 = @"
-        Set-Content -LiteralPath `$cmdPath -Value `$cmdBody -Encoding ASCII
-
-        `$userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
-        if (`$null -eq `$userPath) { `$userPath = "" }
-        `$parts = @(`$userPath -split ";" | ForEach-Object { `$_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace(`$_) })
-        if (-not (`$parts -contains `$binDir)) {
-            `$newPath = if ([string]::IsNullOrWhiteSpace(`$userPath)) { `$binDir } else { "`$userPath;`$binDir" }
-            [Environment]::SetEnvironmentVariable("Path", `$newPath, [EnvironmentVariableTarget]::User)
-            if (`$env:Path -notlike "*`$binDir*") {
-                `$env:Path = "`$env:Path;`$binDir"
-            }
-            Write-Host "[Setup] Added `$binDir to user PATH." -ForegroundColor Green
-        }
-
-        Write-Host "[Setup] Installed global 'loomis' command: `$cmdPath" -ForegroundColor Green
-    } catch {
-        Write-Host ('[Setup] Could not install global ''loomis'' command: ' + `$_.Exception.Message) -ForegroundColor Yellow
-    }
+function Loomis {
+    param([Parameter(ValueFromRemainingArguments = `$true)][string[]]`$Args)
+    AcouLM @Args
 }
+
+Set-Alias -Name acoulm -Value AcouLM -Scope Global
 Set-Alias -Name loomis -Value Loomis -Scope Global
 $endMarker
 "@
-        $block = $blockPart1 + $blockPart2 + $blockPart3
 
         $content = Get-Content -LiteralPath $PROFILE -Raw -ErrorAction SilentlyContinue
         if ($null -eq $content) { $content = "" }
@@ -144,9 +107,9 @@ $endMarker
             Add-Content -LiteralPath $PROFILE -Value ($prefix + $block) -Encoding UTF8
         }
 
-        Write-Host "[Setup] Added 'loomis' terminal command to PowerShell profile. Open a new terminal (or run: . `$PROFILE)." -ForegroundColor Green
+        Write-Host "[Setup] Added 'acoulm' terminal command to PowerShell profile. Open a new terminal (or run: . `$PROFILE)." -ForegroundColor Green
     } catch {
-        Write-Host "[Setup] Could not update PowerShell profile for 'loomis' command: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "[Setup] Could not update PowerShell profile for 'acoulm' command: $($_.Exception.Message)" -ForegroundColor Yellow
         Write-Host "        You can still run chat with: .\npu_cli.ps1 -Command chat" -ForegroundColor DarkGray
     }
 }
@@ -445,7 +408,7 @@ if (Read-YesNo -Prompt "Download a model from Hugging Face now?" -DefaultYes $fa
     Write-Host "Examples:" -ForegroundColor DarkGray
     Write-Host "  One GGUF:  Qwen3-4B-Q4_K_M.gguf" -ForegroundColor DarkGray
     Write-Host "  Sharded safetensors + configs (e.g. Qwen/Qwen3.5-4B):  model.safetensors*,config.json,tokenizer.json,tokenizer_config.json,chat_template.jinja,merges.txt,vocab.json,preprocessor_config.json,video_preprocessor_config.json" -ForegroundColor DarkGray
-    Write-Host "GenAI GGUF preview: prefer Q4_K_M / Q8_0 / FP16-style files; IQ2/IQ3 and similar often fail to load (not a Loomis bug)." -ForegroundColor DarkGray
+Write-Host "GenAI GGUF preview: prefer Q4_K_M / Q8_0 / FP16-style files; IQ2/IQ3 and similar often fail to load (not an AcouLM bug)." -ForegroundColor DarkGray
     $filesFilter = Read-Host "Files/patterns (comma-separated, or Enter = full repo)"
     $filterTrim = if ($null -eq $filesFilter) { "" } else { $filesFilter.Trim() }
     $idTrim = if ($null -eq $idInput) { "" } else { $idInput.Trim() }
@@ -535,7 +498,7 @@ Write-Host "  Backend : $backendId ($backendEntrypoint)"
 Write-Host "  Perf    : $perfProfile ($perfPolicy)"
 
 Ensure-LoomisCommandInProfile -ProjectRoot $scriptDir
-Ensure-LoomisGlobalCommand -ProjectRoot $scriptDir
+Ensure-AcouLMGlobalCommand -ProjectRoot $scriptDir
 
 if (-not $NoLaunch) {
     $launch = Read-YesNo -Prompt "Launch control panel now?" -DefaultYes $true

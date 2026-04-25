@@ -1,12 +1,12 @@
-# Loomis
+# AcouLM
 
-Loomis is a local AI control plane for Windows:
+AcouLM is a local AI control plane for Windows:
 - browser app shell (`app_shell/`)
 - terminal client (`npu_cli.ps1`)
 - first-time setup (`portable_setup.ps1`) — machine registries and optional Hub model download
 - pluggable backends (`registry/backends_registry.json`)
 
-You can run Loomis with the built-in OpenVINO backend (`npu_wrapper`) or an external backend that supports the same API.
+You can run AcouLM with the built-in OpenVINO backend (`npu_wrapper`) or an external backend that supports the same API.
 
 ## User Prerequisites
 
@@ -24,7 +24,7 @@ You can run Loomis with the built-in OpenVINO backend (`npu_wrapper`) or an exte
 - Optional: updated Intel GPU/NPU drivers when using accelerator devices
 - Optional: [Hugging Face Hub CLI](https://huggingface.co/docs/huggingface_hub/guides/cli) (`hf` or `huggingface-cli`, from `pip install -U "huggingface_hub[cli]"`). Required for **partial** Hub downloads (non-empty file/pattern filter) in [First-time setup](#first-time-setup). Without the CLI, that path errors; with an empty filter, setup may fall back to `git clone` and pull the **entire** model repository (including `.git`).
 
-### What Loomis Does Not Bundle
+### What AcouLM Does Not Bundle
 
 - Model weights are not included in this repo
 - External backends are not included (you provide them)
@@ -48,7 +48,7 @@ cd $env:USERPROFILE\Loomis
 ```
 
 What this means:
-- Installs Loomis app shell + downloads the prebuilt runtime bundle from GitHub Releases
+- Installs AcouLM app shell + downloads the prebuilt runtime bundle from GitHub Releases
 - Typically **no separate OpenVINO SDK install is required** for end users in this path
 - Intel drivers are still recommended if you plan to use Intel GPU/NPU acceleration
 
@@ -61,7 +61,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create
 Then configure `registry\backends_registry.json` (`type: "external"`, valid `entrypoint`) and run `.\start_app.ps1`.
 
 What this means:
-- Installs only the Loomis shell/control plane
+- Installs only the AcouLM shell/control plane
 - You bring your own backend/runtime
 - No OpenVINO install is needed unless your chosen backend requires it
 - `portable_setup.ps1` now skips built-in `dist\npu_wrapper.exe` checks when backend type is `external`
@@ -142,11 +142,12 @@ Chat from terminal:
 Shortcut command after running `.\portable_setup.ps1`:
 
 ```powershell
-loomis
+acoulm
 ```
 
 This opens terminal chat by default (`.\npu_cli.ps1 -Command chat`).
-`portable_setup.ps1` also installs a global `loomis` launcher in `%USERPROFILE%\.local\bin`, so it works from any folder after opening a new terminal.
+`portable_setup.ps1` also installs a global `acoulm` launcher in `%USERPROFILE%\.local\bin`, so it works from any folder after opening a new terminal.
+For backward compatibility, `loomis` is kept as an alias.
 
 Interactive chat commands are intentionally minimal:
 - `/status`
@@ -200,7 +201,7 @@ Template files included:
 ## Built-in vs External Backend
 
 - `builtin`: usually `dist/npu_wrapper.exe`; `run.ps1` prepares OpenVINO env. **`start_app.ps1` only accepts model paths that `npu_wrapper` can load** (OpenVINO IR or supported GGUF); optional HF→IR export applies here.
-- `external`: your own executable/script; must provide Loomis API endpoints used by app shell and CLI. **`start_app.ps1` does not enforce OpenVINO layouts** — it checks that the registry path exists, then passes it to your entrypoint (HF `.safetensors`, ONNX, GGUF, etc. are your responsibility). Default `formats` on new external backends is `hf,safetensors,gguf,openvino` as documentation for integrators; adjust in `registry/backends_registry.json` if you want.
+- `external`: your own executable/script; must provide AcouLM API endpoints used by app shell and CLI. **`start_app.ps1` does not enforce OpenVINO layouts** — it checks that the registry path exists, then passes it to your entrypoint (HF `.safetensors`, ONNX, GGUF, etc. are your responsibility). Default `formats` on new external backends is `hf,safetensors,gguf,openvino` as documentation for integrators; adjust in `registry/backends_registry.json` if you want.
 
 Where backends come from:
 - Built-in backend runtime is delivered by the release zip (`loomis-dist-windows-x64.zip`)

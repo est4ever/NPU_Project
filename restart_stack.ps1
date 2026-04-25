@@ -1,4 +1,4 @@
-# Restarts Loomis backend (npu_wrapper) and the app shell (python http.server), then launches start_app.ps1.
+# Restarts AcouLM backend (npu_wrapper) and the app shell (python http.server), then launches start_app.ps1.
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 

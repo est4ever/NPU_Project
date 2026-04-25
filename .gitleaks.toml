@@ -1,7 +1,7 @@
 # Loomis: tune default gitleaks rules (false positives only).
 # Run locally: gitleaks detect --verbose --redact --source .
 
-title = "Loomis"
+title = "AcouLM"
 
 [extend]
 useDefault = true
@@ -11,6 +11,7 @@ description = "False positives: UI prefs key + local model trees (never commit m
 regexes = [
   # localStorage key for app shell prefs — not a credential
   '''^loomis\.ui\.prefs\.v1$''',
+  '''^acoulm\.ui\.prefs\.v1$''',
 ]
 paths = [
   # OpenVINO IR/tokenizer XML under models/ triggers generic-api-key on version attrs; models/ is gitignored.

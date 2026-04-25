@@ -298,7 +298,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     }
   }
 
-  const PREFS_KEY = "loomis" + ".ui.prefs.v1";
+  const PREFS_KEY = "acoulm" + ".ui.prefs.v1";
   function loadPrefs() {
     try {
       return JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");

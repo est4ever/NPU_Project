@@ -456,7 +456,7 @@ What to do next:
   2) Or copy registry\models_registry.example.json -> registry\models_registry.json, put your model under .\models\..., and edit path + selected_model.
   3) Diagnostics: .\preflight_check.ps1 -ModelPath '<your path>'
 
-Docs: README sections 'What Loomis Does Not Bundle' and 'Model Notes'.
+Docs: README sections 'What AcouLM Does Not Bundle' and 'Model Notes'.
 "@
 
     if ($fallback) {
