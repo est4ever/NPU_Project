@@ -24,15 +24,26 @@ std::vector<std::string> OpenVINOScheduler::discover_devices() {
 std::string OpenVINOScheduler::get_optimal_device(EnginePolicy policy) {
     bool has_gpu = std::find(available_devices.begin(), available_devices.end(), "GPU") != available_devices.end();
     bool has_npu = std::find(available_devices.begin(), available_devices.end(), "NPU") != available_devices.end();
+    bool has_cpu = std::find(available_devices.begin(), available_devices.end(), "CPU") != available_devices.end();
 
     std::cout << "[Scheduler] Applying routing policy...\n";
 
     switch (policy) {
         case EnginePolicy::PERFORMANCE:
-            // For max speed, force the heavy Arc GPU if it exists. 
-            // If not, fallback to the fast CPU cores.
-            std::cout << "[Scheduler] Policy: PERFORMANCE. Routing to GPU.\n";
-            return has_gpu ? "GPU" : "CPU";
+            // PERFORMANCE is now balanced TTFT + throughput (not hard GPU-only).
+            if (has_gpu && has_npu) {
+                std::cout << "[Scheduler] Policy: PERFORMANCE. Using AUTO:GPU,NPU,CPU for balanced speed.\n";
+                return "AUTO:GPU,NPU,CPU";
+            }
+            if (has_gpu) {
+                std::cout << "[Scheduler] Policy: PERFORMANCE. Routing to GPU.\n";
+                return "GPU";
+            }
+            if (has_npu) {
+                std::cout << "[Scheduler] Policy: PERFORMANCE. Routing to NPU (GPU unavailable).\n";
+                return "NPU";
+            }
+            return has_cpu ? "CPU" : "AUTO:CPU";
 
         case EnginePolicy::BATTERY_SAVER:
             // For saving battery, we absolutely want the NPU.
@@ -166,28 +177,9 @@ std::string OpenVINOScheduler::get_best_device_from_benchmarks(
     for (const auto& [device, bench] : benchmarks) {
         if (!bench.success) continue;
         
-        double score = 0.0;
-        
-        switch (policy) {
-            case EnginePolicy::PERFORMANCE:
-                // Prioritize throughput
-                score = bench.tokens_per_sec;
-                break;
-                
-            case EnginePolicy::BATTERY_SAVER:
-                // Prioritize NPU, then lowest TTFT
-                if (device == "NPU") {
-                    score = 1000000.0 + bench.tokens_per_sec;  // Huge bonus for NPU
-                } else {
-                    score = bench.tokens_per_sec * 0.5;  // Penalize non-NPU
-                }
-                break;
-                
-            case EnginePolicy::BALANCED:
-            default:
-                // Balance between TTFT and throughput
-                score = bench.tokens_per_sec - (bench.ttft_ms * 0.1);
-                break;
+        double score = score_benchmark_for_policy(bench, policy);
+        if (policy == EnginePolicy::BATTERY_SAVER && device == "NPU") {
+            score += 10000.0;
         }
         
         std::cout << "  - " << device << ": score = " << score << "\n";

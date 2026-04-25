@@ -3,6 +3,7 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <cstdlib>
 #include <openvino/genai/text_streamer.hpp>
 
 namespace {
@@ -160,8 +161,18 @@ void OpenVINOBackend::load_model(const std::string& model_path, const std::strin
         std::cout << "[Backend] CPU optimizations: default threading\n";
     }
     
-    // Universal optimizations
-    pipeline_config["PERFORMANCE_HINT"] = "LATENCY";  // Optimize for low latency
+    // Universal optimizations (policy-aware via env set by launcher/runtime path)
+    const char* perfMode = std::getenv("LOOMIS_PERF_MODE");
+    const std::string perfModeStr = perfMode ? perfMode : "";
+    if (perfModeStr == "balanced-performance") {
+        pipeline_config["PERFORMANCE_HINT"] = "THROUGHPUT";
+        std::cout << "[Backend] Performance profile: balanced-performance (throughput-oriented hint)\n";
+    } else if (perfModeStr == "latency-first") {
+        pipeline_config["PERFORMANCE_HINT"] = "LATENCY";
+        std::cout << "[Backend] Performance profile: latency-first\n";
+    } else {
+        pipeline_config["PERFORMANCE_HINT"] = "LATENCY";
+    }
     
     std::cout << "[Backend] Global: INT8 KV-cache, latency-optimized\n";
 

@@ -4,6 +4,7 @@
 #include "../OpenVINO/Scheduler/IScheduler.h"
 #include <string>
 #include <atomic>
+#include <mutex>
 
 struct RuntimeConfig {
     std::atomic<bool> json_mode{false};
@@ -16,6 +17,9 @@ struct RuntimeConfig {
     
     std::string prefill_device = "NPU";
     std::string decode_device = "GPU";
+    std::string performance_profile = "default";
+    std::string performance_reason = "startup-default";
+    mutable std::mutex profile_mutex;
     
     // Getters for atomic values
     bool get_json_mode() const { return json_mode.load(); }
@@ -34,6 +38,19 @@ struct RuntimeConfig {
     void set_prefill_threshold_high(int val) { prefill_threshold_high.store(val); }
     void set_prefill_threshold_low(int val) { prefill_threshold_low.store(val); }
     void set_policy(EnginePolicy val) { policy.store(val); }
+    void set_performance_profile(const std::string& profile, const std::string& reason) {
+        std::lock_guard<std::mutex> lock(profile_mutex);
+        performance_profile = profile;
+        performance_reason = reason;
+    }
+    std::string get_performance_profile() const {
+        std::lock_guard<std::mutex> lock(profile_mutex);
+        return performance_profile;
+    }
+    std::string get_performance_reason() const {
+        std::lock_guard<std::mutex> lock(profile_mutex);
+        return performance_reason;
+    }
 };
 
 #endif // RUNTIMECONFIG_H

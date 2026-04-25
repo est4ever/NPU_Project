@@ -70,5 +70,9 @@ if ($Passthrough -and $Passthrough.Count -gt 0) {
 } elseif (-not [string]::IsNullOrWhiteSpace($Command) -or -not [string]::IsNullOrWhiteSpace($Prompt) -or ($Arguments -and $Arguments.Count -gt 0) -or $ApiBase -ne "http://localhost:8000") {
     & $cli -ApiBase $ApiBase -Prompt $Prompt -Command $Command -Arguments $Arguments
 } else {
+    if (-not (Test-Path -LiteralPath $start)) { throw "Missing start_app.ps1 at $start" }
+    $quotedScriptDir = $scriptDir.Replace("'", "''")
+    $startCommand = "Set-Location -LiteralPath '$quotedScriptDir'; .\start_app.ps1"
+    Start-Process powershell -ArgumentList @("-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $startCommand) | Out-Null
     & $cli -Command chat
 }

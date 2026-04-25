@@ -509,6 +509,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   function setRuntimeStrip() {
     const active = normalizeDevice(statusCache?.active_device || "-") || "-";
     const policy = statusCache?.policy || "-";
+    const profile = statusCache?.performance_profile || "";
     const lastDevice = normalizeDevice(lastInferenceStats.device || "-") || "-";
     const lastTps = Number.isFinite(lastInferenceStats.tps) ? lastInferenceStats.tps.toFixed(1) : "-";
     const lastTtft = Number.isFinite(lastInferenceStats.ttft_ms) ? `${lastInferenceStats.ttft_ms.toFixed(0)} ms` : "-";
@@ -521,7 +522,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       : [];
 
     if (el("chatActiveDevice")) el("chatActiveDevice").textContent = active;
-    if (el("chatPolicyValue"))  el("chatPolicyValue").textContent  = policy;
+    if (el("chatPolicyValue"))  el("chatPolicyValue").textContent  = profile ? `${policy} (${profile})` : policy;
     if (el("chatLastDevice"))   el("chatLastDevice").textContent   = lastDevice;
     if (el("chatLastTps"))      el("chatLastTps").textContent      = lastTps;
     if (el("chatLastTtft"))     el("chatLastTtft").textContent     = lastTtft;
@@ -1392,7 +1393,8 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         body: JSON.stringify({ policy }),
       });
       printJson(el("devicePolicyOutput"), result);
-      addActivity(`Policy set to ${result.new_policy || policy}`, "ready");
+      const profileText = result.performance_profile ? ` (${result.performance_profile})` : "";
+      addActivity(`Policy set to ${result.new_policy || policy}${profileText}`, "ready");
       await refreshStatus();
     } catch (err) {
       el("devicePolicyOutput").textContent = String(err.message || err);
