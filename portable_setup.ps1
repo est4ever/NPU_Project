@@ -513,10 +513,26 @@ if (Read-YesNo -Prompt "Download a model from Hugging Face now?" -DefaultYes $fa
 
 Add-OrUpdateModel -RegistryPath $modelsRegistryPath -Id $modelId -Path $modelPath -Format $modelFormat -Backend $backendId
 
+$enablePerformanceMode = $false
+if ($backendType -eq "builtin") {
+    $enablePerformanceMode = Read-YesNo -Prompt "Enable performance mode defaults (PERFORMANCE policy + split/context routing)?" -DefaultYes $true
+}
+
+$perfProfilePath = Join-Path $scriptDir "registry\performance_profile.json"
+$perfPolicy = if ($enablePerformanceMode) { "PERFORMANCE" } else { "BALANCED" }
+$perfProfile = if ($enablePerformanceMode) { "balanced-performance" } else { "default" }
+$perfReason = if ($enablePerformanceMode) { "portable-setup-default" } else { "portable-setup-default-balanced" }
+([ordered]@{
+    policy = $perfPolicy
+    performance_profile = $perfProfile
+    performance_reason = $perfReason
+} | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath $perfProfilePath -Encoding UTF8
+
 Write-Host ""
 Write-Host "[Setup] Registry configured:" -ForegroundColor Green
 Write-Host "  Model   : $modelId ($modelPath)"
 Write-Host "  Backend : $backendId ($backendEntrypoint)"
+Write-Host "  Perf    : $perfProfile ($perfPolicy)"
 
 Ensure-LoomisCommandInProfile -ProjectRoot $scriptDir
 Ensure-LoomisGlobalCommand -ProjectRoot $scriptDir
@@ -524,7 +540,11 @@ Ensure-LoomisGlobalCommand -ProjectRoot $scriptDir
 if (-not $NoLaunch) {
     $launch = Read-YesNo -Prompt "Launch control panel now?" -DefaultYes $true
     if ($launch) {
-        & (Join-Path $scriptDir "start_app.ps1") -ModelPath $modelPath -ApiPort $ApiPort -AppPort $AppPort
+        if ($enablePerformanceMode) {
+            & (Join-Path $scriptDir "start_app.ps1") -ModelPath $modelPath -ApiPort $ApiPort -AppPort $AppPort -PerformanceMode
+        } else {
+            & (Join-Path $scriptDir "start_app.ps1") -ModelPath $modelPath -ApiPort $ApiPort -AppPort $AppPort
+        }
         if ($LASTEXITCODE -ne 0) {
             throw "start_app.ps1 failed"
         }

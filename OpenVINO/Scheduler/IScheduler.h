@@ -35,6 +35,24 @@ struct DeviceBenchmark {
     bool success;          // Whether benchmark completed
 };
 
+inline double score_benchmark_for_policy(const DeviceBenchmark& bench, EnginePolicy policy) {
+    if (!bench.success) {
+        return -1e12;
+    }
+    const double ttft_penalty = bench.ttft_ms > 0.0 ? bench.ttft_ms : 5000.0;
+    const double throughput = bench.tokens_per_sec > 0.0 ? bench.tokens_per_sec : 0.0;
+    switch (policy) {
+        case EnginePolicy::PERFORMANCE:
+            // Balanced PERFORMANCE target: prioritize throughput while still penalizing poor TTFT.
+            return (throughput * 0.75) - (ttft_penalty * 0.25);
+        case EnginePolicy::BATTERY_SAVER:
+            return throughput * 0.35 - ttft_penalty * 0.65;
+        case EnginePolicy::BALANCED:
+        default:
+            return throughput * 0.55 - ttft_penalty * 0.45;
+    }
+}
+
 class IScheduler {
 public:
     virtual ~IScheduler() = default;

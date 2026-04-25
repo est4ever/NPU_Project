@@ -338,6 +338,15 @@ static bool is_device_available(const std::vector<std::string>& available, const
     return std::find(available.begin(), available.end(), device) != available.end();
 }
 
+static std::string profile_for_policy(EnginePolicy policy) {
+    switch (policy) {
+        case EnginePolicy::PERFORMANCE: return "balanced-performance";
+        case EnginePolicy::BATTERY_SAVER: return "latency-first";
+        case EnginePolicy::BALANCED:
+        default: return "default";
+    }
+}
+
 static std::string select_best_ttft_device(
     const std::map<std::string, DeviceBenchmark>& benchmarks,
     const std::vector<std::string>& loaded_devices,
@@ -701,6 +710,7 @@ int main(int argc, char** argv) {
     std::cout << "Policy: " << (policy == EnginePolicy::PERFORMANCE ? "PERFORMANCE" : 
                                    policy == EnginePolicy::BATTERY_SAVER ? "BATTERY_SAVER" : "BALANCED") << "\n" << std::flush;
     logline("Policy: ");
+    _putenv_s("LOOMIS_PERF_MODE", profile_for_policy(policy).c_str());
     
     // Check for benchmark mode
     bool benchmark_mode = has_benchmark_flag(argc, argv);
@@ -914,6 +924,7 @@ int main(int argc, char** argv) {
 
                 RuntimeConfig server_config;
                 server_config.set_policy(policy);
+                server_config.set_performance_profile(profile_for_policy(policy), "policy-selected");
                 server_config.set_json_mode(json_mode);
                 server_config.set_split_prefill(split_prefill);
                 server_config.set_context_routing(context_routing);
@@ -1199,6 +1210,7 @@ int main(int argc, char** argv) {
 
                 RuntimeConfig server_config;
                 server_config.set_policy(policy);
+                server_config.set_performance_profile(profile_for_policy(policy), "policy-selected");
                 server_config.set_json_mode(json_mode);
                 server_config.set_split_prefill(split_prefill);
                 server_config.set_context_routing(context_routing);

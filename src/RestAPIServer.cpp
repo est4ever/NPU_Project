@@ -80,6 +80,11 @@ const std::filesystem::path& backends_registry_path() {
     return path;
 }
 
+const std::filesystem::path& performance_profile_path() {
+    static const std::filesystem::path path = registry_dir_path() / "performance_profile.json";
+    return path;
+}
+
 const std::filesystem::path& launch_state_path() {
     static const std::filesystem::path path = registry_dir_path() / "npu_launch_state.json";
     return path;
@@ -888,10 +893,52 @@ void append_metrics_record(const json& record) {
         return;
     }
 }
+
+std::string profile_for_policy(EnginePolicy p) {
+    switch (p) {
+        case EnginePolicy::PERFORMANCE: return "balanced-performance";
+        case EnginePolicy::BATTERY_SAVER: return "latency-first";
+        case EnginePolicy::BALANCED:
+        default: return "default";
+    }
+}
+
+void persist_performance_profile(const RuntimeConfig* config) {
+    if (!config) return;
+    json j = {
+        {"policy", policy_to_string(config->get_policy())},
+        {"performance_profile", config->get_performance_profile()},
+        {"performance_reason", config->get_performance_reason()}
+    };
+    std::ofstream out(performance_profile_path());
+    if (out.is_open()) {
+        out << j.dump(2);
+    }
+}
+
+void try_load_performance_profile(RuntimeConfig* config) {
+    if (!config) return;
+    std::ifstream in(performance_profile_path());
+    if (!in.is_open()) return;
+    try {
+        json j = json::parse(in);
+        const std::string policy = j.value("policy", "");
+        if (!policy.empty()) {
+            config->set_policy(string_to_policy(policy));
+        }
+        const std::string profile = j.value("performance_profile", profile_for_policy(config->get_policy()));
+        const std::string reason = j.value("performance_reason", "persisted-profile");
+        config->set_performance_profile(profile, reason);
+    } catch (...) {
+    }
+}
 }
 
 RestAPIServer::RestAPIServer(BackendPool* pool, RuntimeConfig* config, KVCacheMonitor* kv_monitor, int port)
     : backend_pool_(pool), config_(config ? config : &default_config_), kv_monitor_(kv_monitor), port_(port), running_(false) {
+    if (!config) {
+        try_load_performance_profile(config_);
+    }
     server_ = std::make_unique<httplib::Server>();
     
     // Set up CORS headers for all responses
@@ -1408,6 +1455,8 @@ void RestAPIServer::handle_cli_status(const httplib::Request& req, httplib::Resp
         
         json response = {
             {"policy", policy_to_string(config_->get_policy())},
+            {"performance_profile", config_->get_performance_profile()},
+            {"performance_reason", config_->get_performance_reason()},
             {"active_device", backend_pool_->get_active_device()},
             {"devices", devices},
             {"available_devices", probe_available_devices()},
@@ -1540,9 +1589,12 @@ void RestAPIServer::handle_cli_policy(const httplib::Request& req, httplib::Resp
         
         EnginePolicy new_policy = string_to_policy(policy_str);
         config_->set_policy(new_policy);
+        config_->set_performance_profile(profile_for_policy(new_policy), "api-policy-update");
+        persist_performance_profile(config_);
         
         json response = {
             {"new_policy", policy_to_string(new_policy)},
+            {"performance_profile", config_->get_performance_profile()},
             {"success", true}
         };
         

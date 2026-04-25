@@ -8,7 +8,8 @@ param(
     [string[]]$BackendArgs = @(),
     [switch]$AutoExportIr,
     [switch]$NoAutoExportIr,
-    [switch]$AutoSelectBestModel
+    [switch]$AutoSelectBestModel,
+    [switch]$PerformanceMode
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,6 +22,18 @@ if ($NoAutoExportIr) { $autoExportIr = $false }
 if ($AutoExportIr) { $autoExportIr = $true }
 $autoSelectBestModel = $false
 $autoSelectModelEnv = [string]$env:LOOMIS_AUTO_SELECT_MODEL
+$perfModeEnabled = $false
+if ($env:LOOMIS_PERFORMANCE_MODE -eq "1") { $perfModeEnabled = $true }
+if ($PerformanceMode) { $perfModeEnabled = $true }
+$perfProfileFile = Join-Path $scriptDir "registry\performance_profile.json"
+if ((-not $perfModeEnabled) -and (Test-Path -LiteralPath $perfProfileFile)) {
+    try {
+        $perfCfg = Get-Content -LiteralPath $perfProfileFile -Raw | ConvertFrom-Json
+        if ([string]$perfCfg.policy -eq "PERFORMANCE") {
+            $perfModeEnabled = $true
+        }
+    } catch {}
+}
 
 function Normalize-ModelPathString {
     param([string]$Path)
@@ -584,8 +597,21 @@ function Start-BackendServer {
         throw "[App] Missing run script: $runScript"
     }
 
+    $effectiveArgs = @()
+    if ($perfModeEnabled) {
+        $hasPolicyArg = $false
+        foreach ($existing in $Args) {
+            if ([string]$existing -match '^(--policy|--policy=)') { $hasPolicyArg = $true; break }
+        }
+        if (-not $hasPolicyArg) {
+            $effectiveArgs += @("--policy", "PERFORMANCE")
+        }
+        $effectiveArgs += @("--context-routing", "--split-prefill")
+    }
+    $effectiveArgs += @($Args)
+
     $escapedBackendArgs = @()
-    foreach ($arg in $Args) {
+    foreach ($arg in $effectiveArgs) {
         if ($null -eq $arg -or $arg -eq "") { continue }
         $escaped = $arg.Replace('"', '`"')
         if ($escaped -match '\s') {
@@ -626,6 +652,9 @@ function Wait-ForApiReady {
 Write-Host "[App] Project root: $scriptDir" -ForegroundColor Cyan
 Write-Host "[App] Starting backend API + App Shell (OpenWebUI disabled)..." -ForegroundColor Cyan
 Write-Host "[App] Selected backend type: $($registryBackend.Type)" -ForegroundColor DarkGray
+if ($perfModeEnabled) {
+    Write-Host "[App] Performance mode enabled (PERFORMANCE policy + context-routing + split-prefill defaults)." -ForegroundColor Green
+}
 
 Write-Host "[App] Stopping stale backend/app shell processes..." -ForegroundColor Yellow
 Stop-BackendServer
