@@ -630,7 +630,12 @@ function Start-BackendServer {
     }
 
     $windowStyle = if ($HideWindow) { "Hidden" } else { "Normal" }
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", $backendCmd -WindowStyle $windowStyle | Out-Null
+    $backendArgs = if ($HideWindow) {
+        @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $backendCmd)
+    } else {
+        @("-NoExit", "-Command", $backendCmd)
+    }
+    Start-Process powershell -ArgumentList $backendArgs -WindowStyle $windowStyle | Out-Null
 }
 
 function Wait-ForApiReady {
@@ -641,8 +646,15 @@ function Wait-ForApiReady {
 
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        if (Test-TcpPort -Hostname "127.0.0.1" -Port $Port -TimeoutMs 500) {
-            return $true
+        # TCP-listening is not enough; the backend can bind the port while still loading weights.
+        # Require an actual HTTP response from /v1/health.
+        if (Test-TcpPort -Hostname "127.0.0.1" -Port $Port -TimeoutMs 250) {
+            try {
+                $null = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/v1/health" -Method Get -TimeoutSec 2 -ErrorAction Stop
+                return $true
+            } catch {
+                # keep waiting
+            }
         }
         Start-Sleep -Milliseconds 500
     }
@@ -674,7 +686,12 @@ $pythonExe = Join-Path $scriptDir "venv\Scripts\python.exe"
 $pythonCmd = if (Test-Path $pythonExe) { "& '$pythonExe'" } else { "python" }
 $appShellCmd = "Set-Location '$scriptDir'; $pythonCmd -m http.server $AppPort --directory app_shell"
 $windowStyle = if ($HideServiceWindows) { "Hidden" } else { "Normal" }
-Start-Process powershell -ArgumentList "-NoExit", "-Command", $appShellCmd -WindowStyle $windowStyle | Out-Null
+$appShellArgs = if ($HideServiceWindows) {
+    @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $appShellCmd)
+} else {
+    @("-NoExit", "-Command", $appShellCmd)
+}
+Start-Process powershell -ArgumentList $appShellArgs -WindowStyle $windowStyle | Out-Null
 
 $deadline = (Get-Date).AddSeconds(30)
 $appReady = $false

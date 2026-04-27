@@ -93,15 +93,57 @@ if (-not (Test-Path -LiteralPath (Join-Path $HfModelDir "config.json"))) {
     throw "[IR] Missing config.json under: $HfModelDir"
 }
 
+function Remove-PathWithRetry {
+    param(
+        [string]$Path,
+        [int]$Retries = 8,
+        [int]$DelayMs = 600
+    )
+    if (-not (Test-Path -LiteralPath $Path)) { return $true }
+    for ($i = 0; $i -lt $Retries; $i++) {
+        try {
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            return $true
+        } catch {
+            Start-Sleep -Milliseconds $DelayMs
+        }
+    }
+    return $false
+}
+
+function Move-PathWithRetry {
+    param(
+        [string]$From,
+        [string]$To,
+        [int]$Retries = 8,
+        [int]$DelayMs = 600
+    )
+    for ($i = 0; $i -lt $Retries; $i++) {
+        try {
+            Move-Item -LiteralPath $From -Destination $To -Force -ErrorAction Stop
+            return $true
+        } catch {
+            Start-Sleep -Milliseconds $DelayMs
+        }
+    }
+    return $false
+}
+
 if (Test-Path -LiteralPath $IrOutputDir) {
     $existingXml = Get-ChildItem -LiteralPath $IrOutputDir -Filter "*.xml" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($existingXml) {
         Write-Host "[IR] Already present: $($existingXml.FullName)" -ForegroundColor Green
         exit 0
     }
-    Remove-Item -LiteralPath $IrOutputDir -Recurse -Force -ErrorAction SilentlyContinue
 }
-New-Item -ItemType Directory -Path $IrOutputDir -Force | Out-Null
+
+# Export into a fresh temp folder first. This avoids Optimum's internal merge/unlink step
+# failing on Windows when a stale file is locked (WinError 32).
+$tmpOut = $IrOutputDir + ".tmp-" + ([Guid]::NewGuid().ToString("N"))
+if (Test-Path -LiteralPath $tmpOut) {
+    $null = Remove-PathWithRetry -Path $tmpOut
+}
+New-Item -ItemType Directory -Path $tmpOut -Force | Out-Null
 
 $python = Get-ProjectPythonExe -Root $ProjectRoot
 $cli = Get-OptimumCliExe -PythonExe $python
@@ -122,7 +164,7 @@ $exportArgs = @(
 if ($TrustRemoteCode) {
     $exportArgs += "--trust-remote-code"
 }
-$exportArgs += $IrOutputDir
+$exportArgs += $tmpOut
 
 Write-Host "[IR] optimum-cli $($exportArgs -join ' ')" -ForegroundColor Cyan
 $firstRun = Invoke-NativeCommandCapture -ExePath $cli -CommandArgs $exportArgs
@@ -166,9 +208,23 @@ if ($firstExit -ne 0) {
     }
 }
 
-$xml = Get-ChildItem -LiteralPath $IrOutputDir -Filter "*.xml" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+$xml = Get-ChildItem -LiteralPath $tmpOut -Filter "*.xml" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $xml) {
-    throw "[IR] Export reported success but no .xml was found under: $IrOutputDir"
+    throw "[IR] Export reported success but no .xml was found under: $tmpOut"
 }
 
-Write-Host "[IR] Export complete: $($xml.FullName)" -ForegroundColor Green
+# Swap temp output into final location.
+if (Test-Path -LiteralPath $IrOutputDir) {
+    $backup = $IrOutputDir + ".bak-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+    Write-Host "[IR] Existing IR output detected. Backing up to: $backup" -ForegroundColor Yellow
+    if (-not (Move-PathWithRetry -From $IrOutputDir -To $backup)) {
+        throw "[IR] Could not move existing IR folder out of the way (it may be locked by another process). Close any running backend (npu_wrapper) and retry.`n  From: $IrOutputDir`n  To:   $backup"
+    }
+}
+
+if (-not (Move-PathWithRetry -From $tmpOut -To $IrOutputDir)) {
+    throw "[IR] Export finished but could not finalize output folder (likely locked). Close any running backend (npu_wrapper) and retry.`n  From: $tmpOut`n  To:   $IrOutputDir"
+}
+
+$finalXml = Get-ChildItem -LiteralPath $IrOutputDir -Filter "*.xml" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+Write-Host "[IR] Export complete: $($finalXml.FullName)" -ForegroundColor Green

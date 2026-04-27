@@ -118,73 +118,17 @@ h3 {
   font-size: 0.85rem;
 }
 
-.pixel-robot {
+.logo-side-cat {
   display: inline-block;
-  width: 34px;
-  height: 34px;
-  position: relative;
-  margin-left: 4px;
-  transform-origin: 50% 85%;
-  animation: robotDance 1.05s steps(2, end) infinite;
-  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.2));
-}
-
-.pixel-robot-body {
-  width: 3px;
-  height: 3px;
-  margin: 10px 0 0 12px;
-  background: #f29a7a;
-  box-shadow:
-    /* head */
-    -6px -9px 0 #f29a7a, -3px -9px 0 #f29a7a, 0 -9px 0 #f29a7a, 3px -9px 0 #f29a7a, 6px -9px 0 #f29a7a,
-    -6px -6px 0 #f29a7a, -3px -6px 0 #24181a, 0 -6px 0 #f29a7a, 3px -6px 0 #24181a, 6px -6px 0 #f29a7a,
-    -6px -3px 0 #f29a7a, -3px -3px 0 #f29a7a, 0 -3px 0 #f29a7a, 3px -3px 0 #f29a7a, 6px -3px 0 #f29a7a,
-    /* torso */
-    -3px 0 0 #f29a7a, 0 0 0 #f29a7a, 3px 0 0 #f29a7a,
-    -6px 3px 0 #f29a7a, -3px 3px 0 #f29a7a, 0 3px 0 #f29a7a, 3px 3px 0 #f29a7a, 6px 3px 0 #f29a7a,
-    /* legs */
-    -3px 6px 0 #f29a7a, 3px 6px 0 #f29a7a,
-    -3px 9px 0 #f29a7a, 3px 9px 0 #f29a7a;
-}
-
-.pixel-robot::before,
-.pixel-robot::after {
-  content: "";
-  position: absolute;
-  top: 12px;
-  width: 3px;
-  height: 3px;
-  background: #f29a7a;
-}
-
-.pixel-robot::before {
-  left: 4px;
-  box-shadow: 0 3px 0 #f29a7a;
-  animation: robotArmL 0.55s steps(2, end) infinite alternate;
-}
-
-.pixel-robot::after {
-  right: 4px;
-  box-shadow: 0 3px 0 #f29a7a;
-  animation: robotArmR 0.55s steps(2, end) infinite alternate-reverse;
-}
-
-@keyframes robotDance {
-  0% { transform: translateY(0) rotate(0deg); }
-  25% { transform: translateY(-1px) rotate(-4deg); }
-  50% { transform: translateY(0) rotate(0deg); }
-  75% { transform: translateY(-1px) rotate(4deg); }
-  100% { transform: translateY(0) rotate(0deg); }
-}
-
-@keyframes robotArmL {
-  from { transform: translateY(0); }
-  to { transform: translateY(-2px); }
-}
-
-@keyframes robotArmR {
-  from { transform: translateY(-2px); }
-  to { transform: translateY(0); }
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 8px;
+  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-size: 0.78rem;
+  line-height: 1;
+  color: color-mix(in srgb, var(--brand) 82%, black);
+  background: color-mix(in srgb, var(--brand-2) 16%, white);
+  border: 1px solid color-mix(in srgb, var(--brand) 35%, white);
 }
 
 .header-tools {

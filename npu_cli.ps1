@@ -309,18 +309,56 @@ function Show-RuntimeBanner {
 # ---------------------------------------------------------------------------
 
 function Show-AcouLMSplash {
+    $danceFrames = @(
+        "[■_■] <|>",
+        "[■_■] \\|/",
+        "[■_■] <|>",
+        "[■_■] /|\\"
+    )
+    $prefetchedStatus = $null
+
     $art = @(
-        "  _      ___   ___   __  __ ___ ___ ",
-        " | |    / _ \ / _ \ |  \/  |_ _/ __|",
-        " | |__ | (_) | (_) || |\/| || |\__ \",
-        " |____| \___/ \___/ |_|  |_|___|___/"
+        "      _    ____   ___   _   _  _      __  __ ",
+        "     / \  / ___| / _ \ | | | || |    |  \/  |",
+        "    / _ \| |    | | | || | | || |    | |\/| |",
+        "   / ___ \ |___ | |_| || |_| || |___ | |  | |",
+        "  /_/   \_\____| \___/  \___/ |_____||_|  |_|"
     )
     Write-Host ""
+
+    # Keep robot dancing until the chat backend is actually reachable.
+    $deadline = (Get-Date).AddSeconds(35)
+    $minFrames = 10
+    $i = 0
+    while ((Get-Date) -lt $deadline) {
+        try {
+            # Use a short timeout so animation stays responsive while backend starts.
+            $prefetchedStatus = Invoke-RestMethod -Uri "$ApiBase/v1/cli/status" -Method Get -TimeoutSec 1 -ErrorAction Stop
+        } catch {}
+        $frame = $danceFrames[$i % $danceFrames.Count]
+        Write-Host -NoNewline ("`r  AcouLM " + $frame + "  ")
+        Start-Sleep -Milliseconds 60
+        $i++
+        if ($null -ne $prefetchedStatus -and $i -ge $minFrames) {
+            break
+        }
+    }
+
+    # Erase dance line so it disappears after startup.
+    Write-Host -NoNewline "`r"
+    Write-Host -NoNewline (" " * 52)
+    Write-Host "`r"
+
     foreach ($line in $art) {
         Write-Host $line -ForegroundColor Magenta
     }
-    Write-Host "  (^-^) AcouLM local chat is ready" -ForegroundColor DarkMagenta
+    if ($null -ne $prefetchedStatus) {
+        Write-Host "  [ready] chat is online" -ForegroundColor Magenta
+    } else {
+        Write-Host "  [starting] backend is warming up..." -ForegroundColor Magenta
+    }
     Write-Host ""
+    return $prefetchedStatus
 }
 
 # ---------------------------------------------------------------------------
@@ -440,9 +478,24 @@ function Handle-InlineCommand {
 function Start-ChatLoop {
     param([string]$InitialPrompt = "")
 
-    Show-AcouLMSplash
+    $prefetchedStatus = Show-AcouLMSplash
     Write-Info "Chat"
-    Show-RuntimeBanner
+    if ($null -ne $prefetchedStatus) {
+        $device = if ($prefetchedStatus.active_device)  { $prefetchedStatus.active_device }  else { "?" }
+        $policy = if ($prefetchedStatus.policy)         { $prefetchedStatus.policy }         else { "?" }
+        $model  = if ($prefetchedStatus.selected_model) { $prefetchedStatus.selected_model } else { "?" }
+        $loaded = if ($prefetchedStatus.devices)        { $prefetchedStatus.devices -join ", " } else { "-" }
+        Write-Info ""
+        Write-Info "  Runtime  :  $device  |  $policy  |  $model"
+        Write-Info "  Loaded   :  $loaded"
+        Write-Info "  Control  :  http://localhost:5173"
+        Write-Info ""
+        Write-Dim  "  Type your message and press Enter. Type '/exit' to quit."
+        Write-Dim  "  Type '/status' to see current device / model / metrics."
+        Write-Info ""
+    } else {
+        Show-RuntimeBanner
+    }
 
     # If a prompt was passed on the command line, send it first
     if (-not [string]::IsNullOrWhiteSpace($InitialPrompt)) {
