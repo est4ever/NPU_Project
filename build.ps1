@@ -116,7 +116,7 @@ for ($attempt = 1; $attempt -le 6; $attempt++) {
     }
 }
 if (-not $copied) {
-    throw "Could not copy npu_wrapper.exe into dist\\ after multiple retries. Close running Loomis backend windows and retry."
+    throw "Could not copy npu_wrapper.exe into dist\\ after multiple retries. Close running AcouLM backend windows and retry."
 }
 if (Test-Path $ovinoBin) {
     Copy-Item -Recurse -Force (Join-Path $ovinoBin "*") $distDir

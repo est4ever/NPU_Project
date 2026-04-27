@@ -649,12 +649,12 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       const privateGb = (privateMb / 1024).toFixed(1);
       const wsGb = Number.isFinite(workingSetMb) && workingSetMb > 0 ? (workingSetMb / 1024).toFixed(1) : null;
       if (wsGb) {
-        setChip("rLoomisMemory", `loomis-mem: ${privateGb} GB (ws ${wsGb} GB)`, "ready");
+        setChip("rAcoulmMemory", `acoulm-mem: ${privateGb} GB (ws ${wsGb} GB)`, "ready");
       } else {
-        setChip("rLoomisMemory", `loomis-mem: ${privateGb} GB`, "ready");
+        setChip("rAcoulmMemory", `acoulm-mem: ${privateGb} GB`, "ready");
       }
     } else {
-      setChip("rLoomisMemory", "loomis-mem: -", "busy");
+      setChip("rAcoulmMemory", "acoulm-mem: -", "busy");
     }
   }
 
@@ -1526,7 +1526,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       });
       printJson(output, result);
       addActivity(`Auto model select ${enabled ? "enabled" : "disabled"} (applies on next launch)`, "ready");
-      setFeatureConfirmation(`Auto model select ${enabled ? "enabled" : "disabled"}. Restart via loomis/start_app to apply.`);
+      setFeatureConfirmation(`Auto model select ${enabled ? "enabled" : "disabled"}. Restart via acoulm/start_app to apply.`);
       await refreshStatus();
     } catch (err) {
       output.textContent = String(err.message || err);

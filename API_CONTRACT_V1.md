@@ -478,4 +478,4 @@ Runs `Export-Diagnostics.ps1` and returns `{ "zip_path": "..." }` when `export/l
 
 ### CORS (app shell)
 
-If a browser client sends `x-npu-cli: true` (for example automated benchmark calls), the server must list that header in `Access-Control-Allow-Headers`. Chat in this project is intended for the terminal (`loomis` / `npu_cli.ps1`).
+If a browser client sends `x-npu-cli: true` (for example automated benchmark calls), the server must list that header in `Access-Control-Allow-Headers`. Chat in this project is intended for the terminal (`acoulm` / `npu_cli.ps1`).

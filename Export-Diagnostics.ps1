@@ -10,7 +10,7 @@ if (-not (Test-Path -LiteralPath $exportDir)) {
     New-Item -ItemType Directory -Path $exportDir -Force | Out-Null
 }
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$work = Join-Path $env:TEMP ("loomis-diag-" + $stamp)
+$work = Join-Path $env:TEMP ("acoulm-diag-" + $stamp)
 New-Item -ItemType Directory -Path $work -Force | Out-Null
 
 function Redact-Path {
@@ -46,7 +46,7 @@ if (Test-Path -LiteralPath $dist) {
         Set-Content (Join-Path $work "dist-files.txt") -Encoding UTF8
 }
 
-$zipName = "loomis-diagnostics-$stamp.zip"
+$zipName = "acoulm-diagnostics-$stamp.zip"
 $zipPath = Join-Path $exportDir $zipName
 if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
 Compress-Archive -Path (Join-Path $work "*") -DestinationPath $zipPath -Force

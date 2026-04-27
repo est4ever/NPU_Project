@@ -162,7 +162,7 @@ void OpenVINOBackend::load_model(const std::string& model_path, const std::strin
     }
     
     // Universal optimizations (policy-aware via env set by launcher/runtime path)
-    const char* perfMode = std::getenv("LOOMIS_PERF_MODE");
+    const char* perfMode = std::getenv("ACOULM_PERF_MODE");
     const std::string perfModeStr = perfMode ? perfMode : "";
     if (perfModeStr == "balanced-performance") {
         pipeline_config["PERFORMANCE_HINT"] = "THROUGHPUT";
