@@ -37,13 +37,13 @@ You can run AcouLM with the built-in OpenVINO backend (`npu_wrapper`) or an exte
 2. Run:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -ShellOnly"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/AcouLM/main/install.ps1' -UseBasicParsing))) -ShellOnly"
 ```
 
 3. Then:
 
 ```powershell
-cd $env:USERPROFILE\Loomis
+cd $env:USERPROFILE\AcouLM
 .\portable_setup.ps1
 ```
 
@@ -55,7 +55,7 @@ What this means:
 ### Path B - Shell-only install (external backend users)
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -ShellOnly"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/AcouLM/main/install.ps1' -UseBasicParsing))) -ShellOnly"
 ```
 
 Then configure `registry\backends_registry.json` (`type: "external"`, valid `entrypoint`) and run `.\start_app.ps1`.
@@ -85,13 +85,13 @@ What this means:
 Custom install folder:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -ShellOnly -InstallDir 'D:\AI\Loomis'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/AcouLM/main/install.ps1' -UseBasicParsing))) -ShellOnly -InstallDir 'D:\AI\AcouLM'"
 ```
 
 Pin a specific release tag:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/Loomis/main/install.ps1' -UseBasicParsing))) -ShellOnly -ReleaseTag v1.0.0"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/AcouLM/main/install.ps1' -UseBasicParsing))) -ShellOnly -ReleaseTag v1.0.0"
 ```
 
 ### If scripts are blocked
@@ -123,9 +123,9 @@ Start stack:
 If the selected registry model path is a **HF checkpoint folder** (`.safetensors` only), `start_app.ps1` now attempts a one-shot **automatic HF -> IR export** by default for built-in backend users (via `Export-HfFolderToOpenVinoIR.ps1`) and updates the selected registry path on success. Export can fail for some multimodal or custom architectures.
 
 If you want to override behavior:
-- Force on: `.\start_app.ps1 -AutoExportIr` or `LOOMIS_AUTO_EXPORT_IR=1`
-- Force off: `.\start_app.ps1 -NoAutoExportIr` or `LOOMIS_AUTO_EXPORT_IR=0`
-- Auto-pick best model for this launch: `.\start_app.ps1 -AutoSelectBestModel` or `LOOMIS_AUTO_SELECT_MODEL=1` (heuristic prefers lower-overhead format + smaller model size among runnable/existing registry entries)
+- Force on: `.\start_app.ps1 -AutoExportIr` or `ACOULM_AUTO_EXPORT_IR=1`
+- Force off: `.\start_app.ps1 -NoAutoExportIr` or `ACOULM_AUTO_EXPORT_IR=0`
+- Auto-pick best model for this launch: `.\start_app.ps1 -AutoSelectBestModel` or `ACOULM_AUTO_SELECT_MODEL=1` (heuristic prefers lower-overhead format + smaller model size among runnable/existing registry entries)
 - Browser control panel: Control -> Status Cards -> **auto model select at launch** -> Save (persists in `registry/models_registry.json`; applies next stack launch)
 
 `start_app.ps1` is the primary launcher for users (backend + app shell).
@@ -147,7 +147,7 @@ acoulm
 
 This opens terminal chat by default (`.\npu_cli.ps1 -Command chat`).
 `portable_setup.ps1` also installs a global `acoulm` launcher in `%USERPROFILE%\.local\bin`, so it works from any folder after opening a new terminal.
-For backward compatibility, `loomis` is kept as an alias.
+`acoulm` is the supported command alias.
 
 Interactive chat commands are intentionally minimal:
 - `/status`
@@ -164,14 +164,14 @@ Runtime control (device, policy, feature toggles, registry selection) is browser
 ## Release Asset (for installer)
 
 `install.ps1` expects this exact GitHub Release asset name:
-- `loomis-dist-windows-x64.zip`
+- `acoulm-dist-windows-x64.zip`
 
 The zip must contain the contents of `dist\` at zip root.
 
 Create/update from repo root:
 
 ```powershell
-Compress-Archive -Path (Join-Path $PWD 'dist\*') -DestinationPath loomis-dist-windows-x64.zip -Force
+Compress-Archive -Path (Join-Path $PWD 'dist\*') -DestinationPath acoulm-dist-windows-x64.zip -Force
 ```
 
 Important: zip the contents of `dist\` directly at the archive root (not `dist\dist\...`).
@@ -204,7 +204,7 @@ Template files included:
 - `external`: your own executable/script; must provide AcouLM API endpoints used by app shell and CLI. **`start_app.ps1` does not enforce OpenVINO layouts** — it checks that the registry path exists, then passes it to your entrypoint (HF `.safetensors`, ONNX, GGUF, etc. are your responsibility). Default `formats` on new external backends is `hf,safetensors,gguf,openvino` as documentation for integrators; adjust in `registry/backends_registry.json` if you want.
 
 Where backends come from:
-- Built-in backend runtime is delivered by the release zip (`loomis-dist-windows-x64.zip`)
+- Built-in backend runtime is delivered by the release zip (`acoulm-dist-windows-x64.zip`)
 - External backend is user-supplied and registered in `registry/backends_registry.json`
 
 ## Model Notes
@@ -275,7 +275,7 @@ Runtime secrets/registries remain excluded from git:
 ## Repo vs Release Contents
 
 - **Repository:** source, scripts, docs, `app_shell`, `registry/*.example.json`
-- **Releases:** optional runtime bundle zip (`loomis-dist-windows-x64.zip`)
+- **Releases:** optional runtime bundle zip (`acoulm-dist-windows-x64.zip`)
 - **Do not commit:** machine-specific `registry/*.json`, model files, build outputs
 
 Release zips are for end users of the built-in backend; external-backend users can install with `-ShellOnly` and skip runtime zip distribution.

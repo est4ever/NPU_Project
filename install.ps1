@@ -9,15 +9,15 @@ param(
     [string]$InstallDir = "",
     [string]$ReleaseTag = "latest",
     [string]$Branch = "main",
-    [string]$GitRemote = "https://github.com/est4ever/Loomis.git",
-    [string]$GitHubRepoPath = "est4ever/Loomis",
-    [string]$DistAssetName = "loomis-dist-windows-x64.zip",
+    [string]$GitRemote = "https://github.com/est4ever/AcouLM.git",
+    [string]$GitHubRepoPath = "est4ever/AcouLM",
+    [string]$DistAssetName = "acoulm-dist-windows-x64.zip",
     [switch]$ShellOnly
 )
 
 $ErrorActionPreference = "Stop"
 if (-not $InstallDir) {
-    $InstallDir = Join-Path $env:USERPROFILE "Loomis"
+    $InstallDir = Join-Path $env:USERPROFILE "AcouLM"
 }
 
 try {
@@ -91,7 +91,7 @@ if ($ShellOnly) {
 
 $distDir = Join-Path $InstallDir "dist"
 $url = Get-DistDownloadUrl -Tag $ReleaseTag -RepoPath $GitHubRepoPath -Asset $DistAssetName
-$tmpZip = Join-Path ([System.IO.Path]::GetTempPath()) ("loomis-dist-" + [Guid]::NewGuid().ToString("N") + ".zip")
+$tmpZip = Join-Path ([System.IO.Path]::GetTempPath()) ("acoulm-dist-" + [Guid]::NewGuid().ToString("N") + ".zip")
 
 Write-Host "Downloading reference backend (OpenVINO GenAI) bundle: $url"
 try {

@@ -101,7 +101,7 @@ const std::filesystem::path& restart_stack_script_path() {
 }
 
 const std::filesystem::path& last_error_log_path() {
-    static const std::filesystem::path path = registry_dir_path() / "loomis_last_error.txt";
+    static const std::filesystem::path path = registry_dir_path() / "acoulm_last_error.txt";
     return path;
 }
 

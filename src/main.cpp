@@ -710,7 +710,7 @@ int main(int argc, char** argv) {
     std::cout << "Policy: " << (policy == EnginePolicy::PERFORMANCE ? "PERFORMANCE" : 
                                    policy == EnginePolicy::BATTERY_SAVER ? "BATTERY_SAVER" : "BALANCED") << "\n" << std::flush;
     logline("Policy: ");
-    _putenv_s("LOOMIS_PERF_MODE", profile_for_policy(policy).c_str());
+    _putenv_s("ACOULM_PERF_MODE", profile_for_policy(policy).c_str());
     
     // Check for benchmark mode
     bool benchmark_mode = has_benchmark_flag(argc, argv);

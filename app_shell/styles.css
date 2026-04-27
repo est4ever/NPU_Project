@@ -47,7 +47,7 @@ body {
   gap: 12px;
 }
 
-.loomis-welcome {
+.acoulm-welcome {
   margin: 0 12px;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -58,7 +58,7 @@ body {
   gap: 10px;
 }
 
-.loomis-pixel {
+.acoulm-pixel {
   font-family: "Cascadia Mono", "Consolas", monospace;
   font-size: 0.88rem;
   padding: 3px 8px;
@@ -66,15 +66,15 @@ body {
   border: 1px solid color-mix(in srgb, var(--brand) 38%, white);
   background: color-mix(in srgb, var(--brand-2) 18%, white);
   color: color-mix(in srgb, var(--brand) 82%, black);
-  animation: loomisBlink 2.2s ease-in-out infinite;
+  animation: acoulmBlink 2.2s ease-in-out infinite;
 }
 
-.loomis-welcome-text {
+.acoulm-welcome-text {
   font-size: 0.82rem;
   color: var(--muted);
 }
 
-@keyframes loomisBlink {
+@keyframes acoulmBlink {
   0%, 100% { transform: translateY(0); opacity: 1; }
   50% { transform: translateY(-1px); opacity: 0.88; }
 }
@@ -92,7 +92,7 @@ h1 {
   line-height: 1.15;
 }
 
-.loomis-word {
+.acoulm-word {
   display: inline-block;
   line-height: 1;
 }

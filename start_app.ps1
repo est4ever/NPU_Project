@@ -16,14 +16,14 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptDir
 $autoExportIr = $true
-if ($env:LOOMIS_AUTO_EXPORT_IR -eq "0") { $autoExportIr = $false }
-if ($env:LOOMIS_AUTO_EXPORT_IR -eq "1") { $autoExportIr = $true }
+if ($env:ACOULM_AUTO_EXPORT_IR -eq "0") { $autoExportIr = $false }
+if ($env:ACOULM_AUTO_EXPORT_IR -eq "1") { $autoExportIr = $true }
 if ($NoAutoExportIr) { $autoExportIr = $false }
 if ($AutoExportIr) { $autoExportIr = $true }
 $autoSelectBestModel = $false
-$autoSelectModelEnv = [string]$env:LOOMIS_AUTO_SELECT_MODEL
+$autoSelectModelEnv = [string]$env:ACOULM_AUTO_SELECT_MODEL
 $perfModeEnabled = $false
-if ($env:LOOMIS_PERFORMANCE_MODE -eq "1") { $perfModeEnabled = $true }
+if ($env:ACOULM_PERFORMANCE_MODE -eq "1") { $perfModeEnabled = $true }
 if ($PerformanceMode) { $perfModeEnabled = $true }
 $perfProfileFile = Join-Path $scriptDir "registry\performance_profile.json"
 if ((-not $perfModeEnabled) -and (Test-Path -LiteralPath $perfProfileFile)) {
@@ -508,7 +508,7 @@ Docs: README sections 'What AcouLM Does Not Bundle' and 'Model Notes'.
                 ""
             }
             $autoHint = if (-not $autoExportIr) {
-                "`n`nTip: automatic HF -> IR export is disabled right now. Re-run with .\start_app.ps1 -AutoExportIr (or set env LOOMIS_AUTO_EXPORT_IR=1)."
+                "`n`nTip: automatic HF -> IR export is disabled right now. Re-run with .\start_app.ps1 -AutoExportIr (or set env ACOULM_AUTO_EXPORT_IR=1)."
             } else {
                 ""
             }

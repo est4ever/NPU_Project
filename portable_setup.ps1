@@ -55,7 +55,7 @@ function Save-JsonFile {
     ($Data | ConvertTo-Json -Depth 10) | Set-Content -Path $Path -Encoding UTF8
 }
 
-function Ensure-LoomisCommandInProfile {
+function Ensure-AcouLMCommandInProfile {
     param([string]$ProjectRoot)
 
     try {
@@ -70,8 +70,8 @@ function Ensure-LoomisCommandInProfile {
 
         $escapedRoot = $ProjectRoot.Replace("'", "''")
         # Keep the marker stable so re-running setup updates the existing block.
-        $startMarker = "# >>> Loomis command >>>"
-        $endMarker = "# <<< Loomis command <<<"
+        $startMarker = "# >>> AcouLM command >>>"
+        $endMarker = "# <<< AcouLM command <<<"
         $block = @"
 $startMarker
 function AcouLM {
@@ -85,13 +85,7 @@ function AcouLM {
     & `$wrapper @Args
 }
 
-function Loomis {
-    param([Parameter(ValueFromRemainingArguments = `$true)][string[]]`$Args)
-    AcouLM @Args
-}
-
 Set-Alias -Name acoulm -Value AcouLM -Scope Global
-Set-Alias -Name loomis -Value Loomis -Scope Global
 $endMarker
 "@
 
@@ -497,7 +491,7 @@ Write-Host "  Model   : $modelId ($modelPath)"
 Write-Host "  Backend : $backendId ($backendEntrypoint)"
 Write-Host "  Perf    : $perfProfile ($perfPolicy)"
 
-Ensure-LoomisCommandInProfile -ProjectRoot $scriptDir
+Ensure-AcouLMCommandInProfile -ProjectRoot $scriptDir
 Ensure-AcouLMGlobalCommand -ProjectRoot $scriptDir
 
 if (-not $NoLaunch) {
