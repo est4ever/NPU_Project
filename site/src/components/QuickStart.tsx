@@ -19,12 +19,13 @@ function CommandCard({ title, command }: { title: string; command: string }) {
   );
 }
 
-export function QuickStart() {
+export function QuickStart({ limit, showHeader = true }: { limit?: number; showHeader?: boolean }) {
+  const visible = typeof limit === "number" ? quickStartCommands.slice(0, limit) : quickStartCommands;
   return (
-    <section id="quick-start" className="section-wrap">
-      <h2 className="section-title">Quick Start</h2>
-      <p className="section-subtitle">Install AcouLM, initialize local configuration, and launch browser + CLI workflows in minutes.</p>
-      <div className="mt-6 grid gap-4 md:grid-cols-2">{quickStartCommands.map((item) => <CommandCard key={item.title} {...item} />)}</div>
+    <section id={showHeader ? "quick-start" : undefined} className={showHeader ? "section-wrap" : ""}>
+      {showHeader && <h2 className="section-title">Quick Start</h2>}
+      {showHeader && <p className="section-subtitle">Install AcouLM, initialize local configuration, and launch browser + CLI workflows in minutes.</p>}
+      <div className="mt-6 grid gap-4 md:grid-cols-2">{visible.map((item) => <CommandCard key={item.title} {...item} />)}</div>
     </section>
   );
 }

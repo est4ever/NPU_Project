@@ -1,12 +1,12 @@
 import { Copy } from "lucide-react";
 import { cliCommands } from "../data/site";
 
-export function CliSection() {
+export function CliSection({ showHeader = true }: { showHeader?: boolean }) {
   const copy = async (value: string) => navigator.clipboard.writeText(value);
 
   return (
-    <section id="cli" className="section-wrap">
-      <h2 className="section-title">CLI</h2>
+    <section id={showHeader ? "cli" : undefined} className={showHeader ? "section-wrap" : ""}>
+      {showHeader && <h2 className="section-title">CLI</h2>}
       <div className="mt-6 rounded-xl border border-line bg-black/50 p-4 shadow-glow">
         <div className="mb-4 flex items-center gap-2">
           <span className="h-2.5 w-2.5 rounded-full bg-red-400/80" />
