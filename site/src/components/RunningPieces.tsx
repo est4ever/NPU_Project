@@ -42,7 +42,7 @@ export function RunningPieces() {
         })}
       </div>
       <div className="mt-4 inline-flex items-center gap-2 font-mono text-xs text-slate-400">
-        <Activity size={14} className="text-accent" /> Browser -> API -> Backend | Terminal -> API
+        <Activity size={14} className="text-accent" /> Browser -&gt; API -&gt; Backend | Terminal -&gt; API
       </div>
     </section>
   );
