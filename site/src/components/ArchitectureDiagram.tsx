@@ -22,9 +22,9 @@ export function ArchitectureDiagram() {
         <path d="M120 50 L420 50" stroke="#20d7ff" strokeWidth="2" fill="none" />
         <path d="M580 50 L880 50" stroke="#20d7ff" strokeWidth="2" fill="none" />
         <path d="M120 120 L420 70" stroke="#4ba3ff" strokeWidth="2" fill="none" />
-        <text x="240" y="40" fill="#9ca3af" fontSize="14">Browser -> API</text>
-        <text x="670" y="40" fill="#9ca3af" fontSize="14">API -> Runtime</text>
-        <text x="220" y="130" fill="#9ca3af" fontSize="14">CLI -> API</text>
+        <text x="240" y="40" fill="#9ca3af" fontSize="14">Browser -&gt; API</text>
+        <text x="670" y="40" fill="#9ca3af" fontSize="14">API -&gt; Runtime</text>
+        <text x="220" y="130" fill="#9ca3af" fontSize="14">CLI -&gt; API</text>
       </svg>
     </section>
   );
