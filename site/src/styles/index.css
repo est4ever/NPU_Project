@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html, body, #root {
+  margin: 0;
+  min-height: 100%;
+  font-family: Inter, Segoe UI, Arial, sans-serif;
+  background-color: #05070d;
+}
+
+body {
+  background-image:
+    linear-gradient(rgba(32, 215, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(32, 215, 255, 0.06) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+.section-wrap {
+  margin-top: 3rem;
+  scroll-margin-top: 6rem;
+}
+
+.section-title {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.section-subtitle {
+  margin-top: 0.75rem;
+  max-width: 48rem;
+  color: #94a3b8;
+}
+
+.text-balance {
+  text-wrap: balance;
+}

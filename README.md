@@ -1,5 +1,7 @@
 # AcouLM
 
+🌐 Website: https://est4ever.github.io/AcouLM/
+
 AcouLM is a local AI control plane for Windows:
 - browser app shell (`app_shell/`)
 - terminal client (`npu_cli.ps1`)
