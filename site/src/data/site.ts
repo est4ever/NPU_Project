@@ -72,6 +72,14 @@ export const features = [
 
 export const faqs = [
   {
+    q: "Why doesn't chat in the browser accept /status commands?",
+    a: "Browser chat is for conversation. Runtime and device operations are intentionally terminal-first in npu_cli.ps1 and CLI API endpoints.",
+  },
+  {
+    q: "Do I need an NPU to use AcouLM?",
+    a: "No. CPU-only and other backend paths are supported. NPU/GPU acceleration depends on hardware, drivers, and backend support.",
+  },
+  {
     q: "Does AcouLM include model weights?",
     a: "No. AcouLM does not bundle model weights. You register local model paths in the model registry.",
   },

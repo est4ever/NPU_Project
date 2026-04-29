@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { Hero } from "../components/Hero";
 import { FeatureGrid } from "../components/FeatureGrid";
+import { PathTracks } from "../components/PathTracks";
 import { QuickStart } from "../components/QuickStart";
 import { RunningPieces } from "../components/RunningPieces";
 
@@ -9,10 +10,11 @@ export function HomePage() {
     <>
       <Hero />
       <RunningPieces />
+      <PathTracks />
       <section className="section-wrap">
         <p className="font-mono text-xs uppercase tracking-[0.2em] text-accent/90">// Zero to health-check</p>
         <h2 className="mt-2 section-title text-4xl">Smallest possible start</h2>
-        <p className="section-subtitle">From a fresh clone, this sequence gets you to a running local stack quickly.</p>
+        <p className="section-subtitle">Why this exists: this is the minimum path from zero to "health OK" without long setup noise.</p>
         <QuickStart limit={3} showHeader={false} />
       </section>
       <FeatureGrid />
