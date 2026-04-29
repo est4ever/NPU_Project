@@ -15,27 +15,30 @@ html, body, #root {
 
 body {
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    radial-gradient(circle at 85% 15%, rgba(0, 212, 255, 0.1), transparent 40%);
-  background-size: 42px 42px, 42px 42px, auto;
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    radial-gradient(circle at 12% 8%, rgba(0, 212, 255, 0.08), transparent 34%),
+    radial-gradient(circle at 88% 18%, rgba(122, 90, 255, 0.08), transparent 38%);
+  background-size: 40px 40px, 40px 40px, auto, auto;
 }
 
 .section-wrap {
-  margin-top: 4.5rem;
-  scroll-margin-top: 6rem;
+  margin-top: 5rem;
+  scroll-margin-top: 7rem;
 }
 
 .section-title {
-  font-size: 1.75rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-size: 1.95rem;
+  font-weight: 800;
+  letter-spacing: -0.028em;
+  color: #f8fafc;
 }
 
 .section-subtitle {
-  margin-top: 0.75rem;
-  max-width: 48rem;
+  margin-top: 0.8rem;
+  max-width: 52rem;
   color: #94a3b8;
+  line-height: 1.8;
 }
 
 .text-balance {
