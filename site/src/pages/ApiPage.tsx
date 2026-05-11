@@ -3,7 +3,7 @@ import { DocsLayout } from "../layout/DocsLayout";
 
 export function ApiPage() {
   return (
-    <DocsLayout title="API Reference" subtitle="Why this page exists: define the contract your backend or tooling must follow so runtime control stays predictable.">
+    <DocsLayout title="API Reference" subtitle="Contract your backend or tooling must follow for predictable runtime control.">
       <ApiSection showHeader={false} />
       <p className="mt-6 text-sm text-slate-300">
         External backend note: your backend must implement the AcouLM API contract. See{" "}

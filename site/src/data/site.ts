@@ -75,7 +75,7 @@ export const features = [
 export const faqs = [
   {
     q: "Why doesn't chat in the browser accept /status commands?",
-    a: "Browser chat is for conversation. Runtime and device operations are intentionally terminal-first in npu_cli.ps1 and CLI API endpoints.",
+    a: "Runtime and device operations are terminal-first in npu_cli.ps1 and CLI API endpoints. Use the browser app shell for status, visibility, and control panel workflows.",
   },
   {
     q: "Do I need an NPU to use AcouLM?",

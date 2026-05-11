@@ -4,7 +4,7 @@ import { DocsLayout } from "../layout/DocsLayout";
 
 export function ModelsPage() {
   return (
-    <DocsLayout title="Models and Backends" subtitle="Why this page exists: AcouLM does not ship model weights, so you need one reliable path to obtain models and one path to run them.">
+    <DocsLayout title="Models and Backends" subtitle="AcouLM does not ship model weights; use this page for reliable model and backend setup.">
       <ModelsSection showHeader={false} />
       <div className="mt-6 space-y-4 text-slate-300">
         <p>
