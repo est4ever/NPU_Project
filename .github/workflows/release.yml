@@ -1,0 +1,83 @@
+name: Release Windows Bundle
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    name: Build and publish release assets
+    runs-on: windows-latest
+    env:
+      OPENVINO_GENAI_ARCHIVE_URL: ${{ vars.OPENVINO_GENAI_ARCHIVE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate OpenVINO archive URL variable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace("${env:OPENVINO_GENAI_ARCHIVE_URL}")) {
+            throw "Set repository variable OPENVINO_GENAI_ARCHIVE_URL to a downloadable openvino_genai_windows_*.zip URL."
+          }
+
+      - name: Download and extract OpenVINO GenAI package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $zipPath = Join-Path $env:RUNNER_TEMP "openvino_genai_windows.zip"
+          $dest = Join-Path $env:RUNNER_TEMP "openvino_genai"
+          Invoke-WebRequest -Uri "${env:OPENVINO_GENAI_ARCHIVE_URL}" -OutFile $zipPath
+          Expand-Archive -Path $zipPath -DestinationPath $dest -Force
+          $setup = Get-ChildItem -Path $dest -Recurse -Filter "setupvars.bat" -File | Select-Object -First 1
+          if (-not $setup) { throw "setupvars.bat not found after extraction." }
+          $openvinoRoot = Split-Path -Parent $setup.FullName
+          "OPENVINO_GENAI_DIR=$openvinoRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          .\build.ps1
+
+      - name: Generate SBOM inventory
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          .\Generate-Sbom.ps1
+
+      - name: Package release zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Test-Path -LiteralPath ".\dist")) { throw "dist folder missing after build." }
+          Compress-Archive -Path .\dist\* -DestinationPath .\acoulm-dist-windows-x64.zip -Force
+
+      - name: Generate sha256
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $hash = Get-FileHash -Algorithm SHA256 .\acoulm-dist-windows-x64.zip
+          "$($hash.Hash)  acoulm-dist-windows-x64.zip" | Out-File -FilePath .\acoulm-dist-windows-x64.zip.sha256 -Encoding ascii
+
+      - name: Get newest SBOM path
+        id: sbom
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sbom = Get-ChildItem .\sbom -Filter "dist-sbom-*.txt" -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $sbom) { throw "No SBOM file generated." }
+          "path=$($sbom.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ./acoulm-dist-windows-x64.zip
+            ./acoulm-dist-windows-x64.zip.sha256
+            ${{ steps.sbom.outputs.path }}

@@ -1,0 +1,231 @@
+name: CI Failure Triage
+
+on:
+  workflow_run:
+    workflows:
+      - CI validate
+      - Secret Scan
+      - Build and Test (Windows)
+      - Deploy AcouLM Website
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  triage:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summarize failed jobs/steps
+        id: summarize
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const jobsResp = await github.rest.actions.listJobsForWorkflowRun({
+              owner,
+              repo,
+              run_id: run.id,
+              per_page: 100,
+            });
+
+            const failedJobs = jobsResp.data.jobs.filter(j => j.conclusion === "failure");
+
+            const lines = [];
+            lines.push(`## CI Failure Triage`);
+            lines.push(`- Workflow: \`${run.name}\``);
+            lines.push(`- Branch: \`${run.head_branch}\``);
+            lines.push(`- Commit: \`${run.head_sha.slice(0, 7)}\``);
+            lines.push(`- Run: ${run.html_url}`);
+            lines.push("");
+
+            if (failedJobs.length === 0) {
+              lines.push("No failed jobs were reported by the run API, but conclusion is `failure`.");
+            } else {
+              lines.push("### Failed jobs");
+              for (const job of failedJobs) {
+                lines.push(`- **${job.name}** (${job.html_url})`);
+                const failedSteps = (job.steps || []).filter(s => s.conclusion === "failure");
+                if (failedSteps.length === 0) {
+                  lines.push(`  - No explicit failed step found (possible timeout/cancel/error before step completion).`);
+                } else {
+                  for (const step of failedSteps.slice(0, 5)) {
+                    lines.push(`  - Step: \`${step.name}\``);
+                  }
+                  if (failedSteps.length > 5) {
+                    lines.push(`  - ...and ${failedSteps.length - 5} more failed step(s).`);
+                  }
+                }
+              }
+            }
+
+            const summary = lines.join("\n");
+            core.setOutput("summary", summary);
+            core.setOutput("workflow_name", run.name || "");
+            core.setOutput("has_pr", String((run.pull_requests || []).length > 0));
+            core.setOutput("pr_number", (run.pull_requests || [])[0]?.number?.toString() || "");
+
+      - name: Add summary to PR
+        if: ${{ steps.summarize.outputs.has_pr == 'true' }}
+        uses: actions/github-script@v7
+        env:
+          TRIAGE_SUMMARY: ${{ steps.summarize.outputs.summary }}
+          PR_NUMBER: ${{ steps.summarize.outputs.pr_number }}
+          WORKFLOW_NAME: ${{ steps.summarize.outputs.workflow_name }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const prNumber = Number(process.env.PR_NUMBER);
+            const marker = "<!-- acoulm-ci-failure-triage -->";
+            const body = `${marker}\n${process.env.TRIAGE_SUMMARY}`;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+
+            const existing = comments.find(c => c.user?.type === "Bot" && c.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
+
+            function labelsForWorkflow(name) {
+              const n = (name || "").toLowerCase();
+              const labels = ["ci", "triage"];
+              if (n.includes("secret")) labels.push("security");
+              if (n.includes("build") || n.includes("test")) labels.push("build");
+              if (n.includes("deploy") || n.includes("website") || n.includes("pages")) labels.push("docs");
+              if (n.includes("validate")) labels.push("quality");
+              return [...new Set(labels)];
+            }
+
+            async function ensureLabels(names) {
+              const existing = await github.paginate(github.rest.issues.listLabelsForRepo, {
+                owner,
+                repo,
+                per_page: 100,
+              });
+              const set = new Set(existing.map(l => l.name));
+              for (const name of names) {
+                if (set.has(name)) continue;
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name,
+                  color: "BFDADC",
+                  description: "Auto-applied by CI failure triage workflow",
+                });
+              }
+            }
+
+            const routedLabels = labelsForWorkflow(process.env.WORKFLOW_NAME);
+            await ensureLabels(routedLabels);
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number: prNumber,
+              labels: routedLabels,
+            });
+
+      - name: Open/update failure issue (non-PR branch)
+        if: ${{ steps.summarize.outputs.has_pr != 'true' }}
+        uses: actions/github-script@v7
+        env:
+          TRIAGE_SUMMARY: ${{ steps.summarize.outputs.summary }}
+          WORKFLOW_NAME: ${{ steps.summarize.outputs.workflow_name }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const title = "CI failure triage (automated)";
+            const marker = "<!-- acoulm-ci-failure-triage-issue -->";
+            const body = `${marker}\n${process.env.TRIAGE_SUMMARY}`;
+
+            function labelsForWorkflow(name) {
+              const n = (name || "").toLowerCase();
+              const labels = ["ci", "triage"];
+              if (n.includes("secret")) labels.push("security");
+              if (n.includes("build") || n.includes("test")) labels.push("build");
+              if (n.includes("deploy") || n.includes("website") || n.includes("pages")) labels.push("docs");
+              if (n.includes("validate")) labels.push("quality");
+              return [...new Set(labels)];
+            }
+            const routedLabels = labelsForWorkflow(process.env.WORKFLOW_NAME);
+            async function ensureLabels(names) {
+              const existing = await github.paginate(github.rest.issues.listLabelsForRepo, {
+                owner,
+                repo,
+                per_page: 100,
+              });
+              const set = new Set(existing.map(l => l.name));
+              for (const name of names) {
+                if (set.has(name)) continue;
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name,
+                  color: "BFDADC",
+                  description: "Auto-applied by CI failure triage workflow",
+                });
+              }
+            }
+            await ensureLabels(routedLabels);
+
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100,
+            });
+
+            const existing = issues.find(i => i.title === title && !i.pull_request);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: existing.number,
+                body,
+              });
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: existing.number,
+                labels: routedLabels,
+              });
+            } else {
+              await github.rest.issues.createIssue({
+                owner,
+                repo,
+                title,
+                body,
+                labels: routedLabels,
+              });
+            }
+
+      - name: Add step summary
+        run: |
+          echo "${{ steps.summarize.outputs.summary }}" >> "$GITHUB_STEP_SUMMARY"

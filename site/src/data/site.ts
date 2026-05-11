@@ -13,8 +13,10 @@ export const quickStartCommands = [
       "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/est4ever/AcouLM/main/install.ps1' -UseBasicParsing))) -ShellOnly\"",
   },
   { title: "Setup", command: "cd $env:USERPROFILE\\AcouLM\n.\\portable_setup.ps1" },
-  { title: "Start", command: ".\\start_app.ps1" },
-  { title: "Terminal Chat", command: ".\\npu_cli.ps1" },
+  { title: "One command (daily use)", command: "acoulm" },
+  { title: "Start (UI + API)", command: ".\\start_app.ps1" },
+  { title: "Optional: persist performance mode", command: ".\\start_app.ps1 -PerformanceMode" },
+  { title: "Terminal Chat (direct)", command: ".\\npu_cli.ps1" },
   { title: "One-shot Chat", command: ".\\npu_cli.ps1 -Command chat -Arguments \"hello\"" },
 ];
 
@@ -94,14 +96,6 @@ export const faqs = [
   {
     q: "What is the difference between app shell and CLI?",
     a: "The app shell provides browser-based control and visibility, while the CLI is optimized for terminal-first operation and scripting.",
-  },
-  {
-    q: "Does it support GGUF?",
-    a: "Yes. The built-in backend supports OpenVINO IR and supported GGUF through OpenVINO GenAI.",
-  },
-  {
-    q: "Can I deploy this website without buying a domain?",
-    a: "Yes. Use GitHub Pages at https://est4ever.github.io/AcouLM/ or a free Vercel subdomain. A .ai domain is paid and optional.",
   },
   {
     q: "Is AcouLM Windows-only?",
