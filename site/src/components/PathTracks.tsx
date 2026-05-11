@@ -3,38 +3,55 @@ import { Cpu, ExternalLink, Layers, TerminalSquare } from "lucide-react";
 const paths = [
   {
     id: "Path A",
-    title: "Reference Backend",
-    tag: "OpenVINO / npu_wrapper",
+    title: "App shell + bundled built-in runtime (recommended)",
+    tag: "Bundled runtime",
     icon: Cpu,
-    why: "Use this when you want the default AcouLM runtime path with local CPU/GPU/NPU routing where supported.",
+    why: "Recommended path for most users.",
     steps: [
-      "Run install.ps1 from the repo",
-      "Place OpenVINO IR model under %USERPROFILE%\\AcouLM\\models\\...",
-      "Run .\\portable_setup.ps1, then .\\start_app.ps1",
+      "Install Git for Windows.",
+      "Run install.ps1 with -ShellOnly.",
+      "Run: cd $env:USERPROFILE\\AcouLM; .\\portable_setup.ps1",
+    ],
+    details: [
+      "Installs AcouLM app shell + downloads the prebuilt runtime bundle from GitHub Releases.",
+      "Typically no separate OpenVINO SDK install is required for end users in this path.",
+      "Intel drivers are still recommended for Intel GPU/NPU acceleration.",
     ],
   },
   {
     id: "Path B",
-    title: "Shell Only",
+    title: "Shell-only install (external backend users)",
     tag: "External backend",
     icon: Layers,
-    why: "Use this when you already have your own inference server and only need AcouLM UI + CLI control plane.",
+    why: "Use this when you already have your own backend/runtime.",
     steps: [
-      "Install with -ShellOnly",
-      "Copy registry/*.example.json to registry/*.json",
-      "Set backend type to external and valid entrypoint",
+      "Run install.ps1 with -ShellOnly.",
+      "Configure registry\\backends_registry.json with type: external and a valid entrypoint.",
+      "Run .\\start_app.ps1.",
+    ],
+    details: [
+      "Installs only the AcouLM shell/control plane.",
+      "You bring your own backend/runtime.",
+      "No OpenVINO install is needed unless your chosen backend requires it.",
+      "portable_setup.ps1 skips built-in dist\\npu_wrapper.exe checks when backend type is external.",
     ],
   },
   {
     id: "Path C",
-    title: "Manual / Developer",
+    title: "Manual source download",
     tag: "Source + release assets",
     icon: TerminalSquare,
-    why: "Use this when you want full control over source, dist runtime contents, and custom local configuration.",
+    why: "Most flexible path for source/developer workflows.",
     steps: [
-      "Clone repository",
-      "Optionally unpack release zip into dist/",
-      "Configure registry and run .\\start_app.ps1",
+      "Clone or download this repository.",
+      "Choose one: put npu_wrapper.exe + DLLs under dist, or configure external backend entrypoint.",
+      "Initialize with .\\portable_setup.ps1 (or copy registry/*.example.json to registry/*.json).",
+      "Launch with .\\start_app.ps1.",
+    ],
+    details: [
+      "Most flexible path (you assemble runtime/backends yourself).",
+      "Built-in backend from source may require developer dependencies.",
+      "If you use external backend only, OpenVINO is optional (depends on that backend).",
     ],
   },
 ];
@@ -63,7 +80,11 @@ export function PathTracks() {
               </ol>
               <details className="mt-4">
                 <summary className="cursor-pointer text-sm text-accent">Details</summary>
-                <p className="mt-2 text-xs text-slate-400">See README paths A/B/C for full matrix, driver notes, and backend contract details.</p>
+                <ul className="mt-2 space-y-1 text-xs text-slate-400">
+                  {path.details.map((detail) => (
+                    <li key={detail}>- {detail}</li>
+                  ))}
+                </ul>
               </details>
             </article>
           );
