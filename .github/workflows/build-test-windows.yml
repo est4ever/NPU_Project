@@ -1,0 +1,120 @@
+name: Build and Test (Windows)
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shell-smoke:
+    name: Shell smoke checks
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: acoulm help renders
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\acoulm.ps1 help | Out-Host
+
+      - name: Parse JSON registries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Get-ChildItem .\registry -Filter *.json -File | ForEach-Object {
+            $null = Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json -ErrorAction Stop
+          }
+          Write-Host "Registry JSON parse OK."
+
+  windows-build:
+    name: Build dist on Windows
+    runs-on: windows-latest
+    needs: shell-smoke
+    env:
+      OPENVINO_GENAI_ARCHIVE_URL: ${{ vars.OPENVINO_GENAI_ARCHIVE_URL }}
+      ACOULM_SMOKE_MODEL: ${{ vars.ACOULM_SMOKE_MODEL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate OpenVINO archive URL variable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace("${env:OPENVINO_GENAI_ARCHIVE_URL}")) {
+            throw "Set repository variable OPENVINO_GENAI_ARCHIVE_URL to a downloadable openvino_genai_windows_*.zip URL."
+          }
+
+      - name: Download and extract OpenVINO GenAI package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $zipPath = Join-Path $env:RUNNER_TEMP "openvino_genai_windows.zip"
+          $dest = Join-Path $env:RUNNER_TEMP "openvino_genai"
+          Invoke-WebRequest -Uri "${env:OPENVINO_GENAI_ARCHIVE_URL}" -OutFile $zipPath
+          Expand-Archive -Path $zipPath -DestinationPath $dest -Force
+          $setup = Get-ChildItem -Path $dest -Recurse -Filter "setupvars.bat" -File | Select-Object -First 1
+          if (-not $setup) { throw "setupvars.bat not found after extraction." }
+          $openvinoRoot = Split-Path -Parent $setup.FullName
+          "OPENVINO_GENAI_DIR=$openvinoRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "OPENVINO_GENAI_DIR=$openvinoRoot"
+
+      - name: Build runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          .\build.ps1
+
+      - name: Generate SBOM inventory
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          .\Generate-Sbom.ps1
+
+      - name: Optional live API smoke test
+        if: ${{ env.ACOULM_SMOKE_MODEL != '' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Start-Process -FilePath "powershell" -ArgumentList @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", ".\start_app.ps1",
+            "-TimeoutSeconds", "240",
+            "-SkipAppShell"
+          ) -WindowStyle Hidden | Out-Null
+
+          $deadline = (Get-Date).AddMinutes(5)
+          $ready = $false
+          while ((Get-Date) -lt $deadline) {
+            try {
+              $null = Invoke-RestMethod -Uri "http://127.0.0.1:8000/v1/health" -TimeoutSec 2 -ErrorAction Stop
+              $ready = $true
+              break
+            } catch {
+              Start-Sleep -Seconds 2
+            }
+          }
+          if (-not $ready) { throw "API did not become ready within 5 minutes." }
+          .\smoke_api.ps1 -ApiBase "http://127.0.0.1:8000" -Model "${env:ACOULM_SMOKE_MODEL}"
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: acoulm-dist-windows-x64
+          path: dist
+          if-no-files-found: error
+
+      - name: Upload sbom artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: acoulm-sbom
+          path: sbom
+          if-no-files-found: error
