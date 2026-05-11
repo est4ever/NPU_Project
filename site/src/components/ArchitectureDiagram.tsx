@@ -1,14 +1,12 @@
 import { ArrowRight, Binary, Cpu, Globe, Server, TerminalSquare, type LucideIcon } from "lucide-react";
 
 function Node({
-  title,
   icon: Icon,
 }: {
-  title: string;
   icon: LucideIcon;
 }) {
   return (
-    <article className="rounded-xl border border-line bg-[#0d1320] p-4 shadow-glow" aria-label={title} title={title}>
+    <article className="rounded-xl border border-line bg-[#0d1320] p-4 shadow-glow" aria-hidden="true">
       <div className="flex items-center justify-center">
         <div className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-accent/35 bg-accent/10 text-accent">
           <Icon size={18} />
@@ -53,10 +51,10 @@ export function ArchitectureDiagram({ compact = false }: { compact?: boolean }) 
         </p>
       )}
       <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Node title="Browser App Shell" icon={Globe} />
-        <Node title="HTTP API" icon={Server} />
-        <Node title="Backend Runtime" icon={Cpu} />
-        <Node title="Terminal CLI" icon={TerminalSquare} />
+        <Node icon={Globe} />
+        <Node icon={Server} />
+        <Node icon={Cpu} />
+        <Node icon={TerminalSquare} />
       </div>
       <svg viewBox="0 0 1000 210" className="mt-6 w-full" aria-label="AcouLM data flow diagram">
         <defs>
