@@ -39,9 +39,11 @@ export function Hero() {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-line bg-panel/80 p-5 shadow-glow">
+        <div className="rounded-2xl border border-line bg-panel/80 p-5 shadow-glow lg:p-6">
           <p className="mb-4 font-mono text-xs uppercase tracking-[0.18em] text-accent/90">// System Architecture</p>
-          <ArchitectureDiagram compact />
+          <div className="max-w-[42rem]">
+            <ArchitectureDiagram compact />
+          </div>
         </div>
       </div>
     </section>
