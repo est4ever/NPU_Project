@@ -3,13 +3,11 @@ import { Hero } from "../components/Hero";
 import { FeatureGrid } from "../components/FeatureGrid";
 import { PathTracks } from "../components/PathTracks";
 import { QuickStart } from "../components/QuickStart";
-import { RunningPieces } from "../components/RunningPieces";
 
 export function HomePage() {
   return (
     <>
       <Hero />
-      <RunningPieces />
       <PathTracks />
       <section className="section-wrap">
         <p className="font-mono text-xs uppercase tracking-[0.2em] text-accent/90">// Zero to health-check</p>
