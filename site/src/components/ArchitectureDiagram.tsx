@@ -55,14 +55,14 @@ export function ArchitectureDiagram({ compact = false }: { compact?: boolean }) 
       {!compact && <h2 className="section-title">Architecture</h2>}
       {!compact && (
         <p className="section-subtitle">
-          App shell and terminal tools converge on one local API surface that routes to runtime backends.
+          Browser app shell and terminal CLI converge on one local API surface that routes to built-in or external backends.
         </p>
       )}
       <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Node title="App Shell" subtitle="local UI" icon={Globe} />
-        <Node title="API Service" subtitle="v1 endpoints" icon={Server} />
-        <Node title="Runtime" subtitle="selected backend" icon={Cpu} />
-        <Node title="CLI Tool" subtitle="terminal control" icon={TerminalSquare} />
+        <Node title="Browser App Shell" subtitle="localhost:5173" icon={Globe} />
+        <Node title="HTTP API" subtitle="localhost:8000/v1" icon={Server} />
+        <Node title="Backend Runtime" subtitle="npu_wrapper / external" icon={Cpu} />
+        <Node title="Terminal CLI" subtitle="npu_cli.ps1" icon={TerminalSquare} />
       </div>
       <svg viewBox="0 0 1000 210" className="mt-6 w-full" aria-label="AcouLM data flow diagram">
         <defs>
@@ -75,21 +75,21 @@ export function ArchitectureDiagram({ compact = false }: { compact?: boolean }) 
         <path d="M825 70 L825 150" stroke="#6f7cff" strokeWidth="2" markerEnd="url(#arrowhead-tech)" fill="none" />
         <path d="M90 155 L390 88" stroke="#6f7cff" strokeWidth="2" markerEnd="url(#arrowhead-tech)" fill="none" />
 
-        <text x="220" y="44" fill="#8fa4bd" fontSize="13">UI -&gt; API</text>
+        <text x="195" y="44" fill="#8fa4bd" fontSize="13">Browser -&gt; API</text>
         <text x="548" y="44" fill="#8fa4bd" fontSize="13">API -&gt; Runtime</text>
-        <text x="182" y="172" fill="#8fa4bd" fontSize="13">CLI -&gt; API</text>
+        <text x="158" y="172" fill="#8fa4bd" fontSize="13">CLI -&gt; API</text>
       </svg>
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <FlowChip from="UI" to="API" />
-        <FlowChip from="API" to="Runtime" />
+        <FlowChip from="Browser UI" to="API Layer" />
+        <FlowChip from="API Layer" to="Runtime" />
         <FlowChip from="CLI" to="API" tone="violet" />
         <span
           className="inline-flex items-center gap-2 rounded-full border border-line bg-[#0a0f1a] px-3 py-1.5 font-mono text-[11px] text-slate-300"
-          aria-label="Compute devices"
-          title="Compute devices"
+          aria-label="CPU, GPU, NPU"
+          title="CPU, GPU, NPU"
         >
           <Binary size={12} className="text-accent" />
-          devices
+          CPU | GPU | NPU
         </span>
       </div>
     </section>
