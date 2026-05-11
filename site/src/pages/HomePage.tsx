@@ -1,12 +1,14 @@
 import { Link } from "react-router-dom";
 import { Hero } from "../components/Hero";
 import { FeatureGrid } from "../components/FeatureGrid";
+import { PathTracks } from "../components/PathTracks";
 import { QuickStart } from "../components/QuickStart";
 
 export function HomePage() {
   return (
     <>
       <Hero />
+      <PathTracks />
       <section className="section-wrap">
         <p className="font-mono text-xs uppercase tracking-[0.2em] text-accent/90">// Zero to health-check</p>
         <h2 className="mt-2 section-title text-4xl">Smallest possible start</h2>
