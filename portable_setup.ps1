@@ -59,13 +59,22 @@ function Ensure-AcouLMCommandInProfile {
     param([string]$ProjectRoot)
 
     try {
+        $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
         if (-not $PROFILE) { return }
         $profileDir = Split-Path -Parent $PROFILE
-        if ($profileDir -and -not (Test-Path -LiteralPath $profileDir)) {
-            New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+        if ($profileDir) {
+            try {
+                $null = [System.IO.Directory]::CreateDirectory($profileDir)
+            } catch {
+                throw "Cannot create PowerShell profile directory: $profileDir"
+            }
         }
         if (-not (Test-Path -LiteralPath $PROFILE)) {
-            New-Item -ItemType File -Path $PROFILE -Force | Out-Null
+            try {
+                [System.IO.File]::WriteAllText($PROFILE, "")
+            } catch {
+                throw "Cannot create PowerShell profile file: $PROFILE"
+            }
         }
 
         $escapedRoot = $ProjectRoot.Replace("'", "''")
@@ -76,10 +85,15 @@ function Ensure-AcouLMCommandInProfile {
 $startMarker
 function AcouLM {
     param([Parameter(ValueFromRemainingArguments = `$true)][string[]]`$Args)
-    `$root = '$escapedRoot'
+    `$root = if (-not [string]::IsNullOrWhiteSpace(`$env:ACOULM_HOME)) {
+        `$h = [System.IO.Path]::GetFullPath(`$env:ACOULM_HOME.Trim())
+        if (Test-Path -LiteralPath (Join-Path `$h 'acoulm.ps1')) { `$h } else { '$escapedRoot' }
+    } else {
+        '$escapedRoot'
+    }
     `$wrapper = Join-Path `$root 'acoulm.ps1'
     if (-not (Test-Path -LiteralPath `$wrapper)) {
-        Write-Error "AcouLM launcher not found at `$wrapper"
+        Write-Error "AcouLM launcher not found at `$wrapper. Run portable_setup.ps1 -NoLaunch from your install or fix ACOULM_HOME."
         return
     }
     & `$wrapper @Args
@@ -105,6 +119,66 @@ $endMarker
     } catch {
         Write-Host "[Setup] Could not update PowerShell profile for 'acoulm' command: $($_.Exception.Message)" -ForegroundColor Yellow
         Write-Host "        You can still run chat with: .\npu_cli.ps1 -Command chat" -ForegroundColor DarkGray
+    }
+}
+
+function Ensure-AcouLMGlobalCommand {
+    param([string]$ProjectRoot)
+
+    try {
+        $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
+        [Environment]::SetEnvironmentVariable("ACOULM_HOME", $ProjectRoot, "User")
+        $env:ACOULM_HOME = $ProjectRoot
+        Write-Host "[Setup] Set user ACOULM_HOME=$ProjectRoot (global launcher and profile use this if present)." -ForegroundColor Green
+
+        $binDir = Join-Path $env:USERPROFILE ".local\bin"
+        if (-not (Test-Path -LiteralPath $binDir)) {
+            New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+        }
+
+        $launcherPath = Join-Path $binDir "acoulm.cmd"
+        $escapedRoot = $ProjectRoot.Replace('"', '""')
+        $escapedWrapper = (Join-Path $escapedRoot "acoulm.ps1").Replace('"', '""')
+        $content = @"
+@echo off
+setlocal
+REM Prefer ACOULM_HOME so the command keeps working if you move the repo (update env once).
+if defined ACOULM_HOME (
+  if exist "%ACOULM_HOME%\acoulm.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%ACOULM_HOME%\acoulm.ps1" %*
+    exit /b %ERRORLEVEL%
+  )
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "$escapedWrapper" %*
+"@
+
+        Set-Content -LiteralPath $launcherPath -Value $content -Encoding ASCII
+        Write-Host "[Setup] Installed global 'acoulm' launcher at $launcherPath" -ForegroundColor Green
+
+        # Ensure global launcher directory is available in new shells.
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        if ($null -eq $userPath) { $userPath = "" }
+        $pathParts = @(
+            $userPath -split ";" |
+                ForEach-Object { $_.Trim() } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        )
+        $hasBinDir = $false
+        foreach ($part in $pathParts) {
+            if ($part.TrimEnd("\").ToLowerInvariant() -eq $binDir.TrimEnd("\").ToLowerInvariant()) {
+                $hasBinDir = $true
+                break
+            }
+        }
+        if (-not $hasBinDir) {
+            $newUserPath = if ([string]::IsNullOrWhiteSpace($userPath)) { $binDir } else { "$userPath;$binDir" }
+            [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+            $env:Path = "$env:Path;$binDir"
+            Write-Host "[Setup] Added $binDir to user PATH. Open a new terminal to use 'acoulm' globally." -ForegroundColor Green
+        }
+    } catch {
+        Write-Host "[Setup] Could not install global 'acoulm' launcher: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "        You can still run: .\acoulm.ps1" -ForegroundColor DarkGray
     }
 }
 
@@ -212,11 +286,31 @@ function Download-Model {
     if ([string]::IsNullOrWhiteSpace($Repo)) {
         throw "Model repo is required for download"
     }
+    $Repo = ($Repo + "").Trim().Trim("/")
+    if ([string]::IsNullOrWhiteSpace($Repo)) {
+        throw "Model repo cannot be empty after trimming. Use form: org/model"
+    }
+    if ($Repo -notmatch ".+/.+") {
+        throw "Model repo must be in Hugging Face format 'org/model' (got '$Repo')"
+    }
     if ([string]::IsNullOrWhiteSpace($ModelId)) {
         $ModelId = ($Repo -split "/")[-1]
     }
+    $ModelId = ($ModelId + "").Trim()
+    if ([string]::IsNullOrWhiteSpace($ModelId) -or $ModelId -in @(".", "..")) {
+        throw "Refusing to use unsafe model id '$ModelId'. Provide a non-empty folder name under .\models\."
+    }
+    if ($ModelId.Contains("\") -or $ModelId.Contains("/")) {
+        throw "Model id must be a single folder name (no path separators): '$ModelId'"
+    }
 
-    $target = Join-Path $scriptDir (Join-Path "models" $ModelId)
+    $modelsRoot = Join-Path $scriptDir "models"
+    $target = Join-Path $modelsRoot $ModelId
+    $rootResolved = [System.IO.Path]::GetFullPath($modelsRoot).TrimEnd("\")
+    $targetResolved = [System.IO.Path]::GetFullPath($target).TrimEnd("\")
+    if ($targetResolved -eq $rootResolved) {
+        throw "Refusing to use models root as target: $targetResolved"
+    }
     if (-not (Test-Path $target)) {
         New-Item -ItemType Directory -Path $target -Force | Out-Null
     }
@@ -321,16 +415,8 @@ $backendsRegistryPath = Join-Path $scriptDir "registry\backends_registry.json"
 Ensure-RegistryFile -Path $modelsRegistryPath -Default ([ordered]@{
     schema = 1
     auto_select_best_model = $false
-    selected_model = "openvino-local"
-    models = @(
-        [ordered]@{
-            id = "openvino-local"
-            path = "./models/Qwen2.5-0.5B-Instruct"
-            format = "openvino"
-            backend = "openvino"
-            status = "ready"
-        }
-    )
+    selected_model = ""
+    models = @()
 })
 
 Ensure-RegistryFile -Path $backendsRegistryPath -Default ([ordered]@{
@@ -385,9 +471,23 @@ if ($backendType -eq "builtin") {
     Write-Host "[Setup] External backend selected; skipping built-in dist\npu_wrapper.exe checks." -ForegroundColor Cyan
 }
 
-$modelId = "openvino-local"
-$modelPath = "./models/Qwen2.5-0.5B-Instruct"
+$modelId = "local-model"
+$modelPath = "./models"
 $modelFormat = "openvino"
+try {
+    $existingModels = Load-JsonFile -Path $modelsRegistryPath
+    if ($existingModels -and -not [string]::IsNullOrWhiteSpace(($existingModels.selected_model + "").Trim())) {
+        $selected = $existingModels.selected_model
+        foreach ($m in @($existingModels.models)) {
+            if ($m.id -eq $selected) {
+                if (-not [string]::IsNullOrWhiteSpace(($m.id + "").Trim())) { $modelId = $m.id }
+                if (-not [string]::IsNullOrWhiteSpace(($m.path + "").Trim())) { $modelPath = $m.path }
+                if (-not [string]::IsNullOrWhiteSpace(($m.format + "").Trim())) { $modelFormat = $m.format }
+                break
+            }
+        }
+    }
+} catch {}
 
 if (Read-YesNo -Prompt "Download a model from Hugging Face now?" -DefaultYes $false) {
     Write-Host ""
@@ -411,6 +511,9 @@ Write-Host "GenAI GGUF preview: prefer Q4_K_M / Q8_0 / FP16-style files; IQ2/IQ3
         $filesFilter = ""
     }
     $downloadedId = Download-Model -Repo $repo -ModelId $idInput -FilesFilter $filesFilter
+    if ([string]::IsNullOrWhiteSpace(($downloadedId + "").Trim())) {
+        throw "[Setup] Download produced an empty local model id. Re-enter repo in 'org/model' form (no trailing slash)."
+    }
     $dlDir = Join-Path $scriptDir (Join-Path "models" $downloadedId)
     if (-not [string]::IsNullOrWhiteSpace(($filesFilter + "").Trim())) {
         $got = @(Get-ChildItem -LiteralPath $dlDir -File -Force -ErrorAction SilentlyContinue)
@@ -433,6 +536,9 @@ Write-Host "GenAI GGUF preview: prefer Q4_K_M / Q8_0 / FP16-style files; IQ2/IQ3
         }
     }
     $dlForFormat = Join-Path $scriptDir (Join-Path "models" $downloadedId)
+    if ([string]::IsNullOrWhiteSpace(($dlForFormat + "").Trim())) {
+        throw "[Setup] Internal error: computed model path is empty; aborting IR export."
+    }
     if (Test-Path -LiteralPath $dlForFormat) {
         $stFiles = @(Get-ChildItem -LiteralPath $dlForFormat -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.(?i)safetensors$' })
         $xmlFiles = @(Get-ChildItem -LiteralPath $dlForFormat -Filter "*.xml" -File -ErrorAction SilentlyContinue)
@@ -462,8 +568,8 @@ Write-Host "GenAI GGUF preview: prefer Q4_K_M / Q8_0 / FP16-style files; IQ2/IQ3
         }
     }
 } else {
-    $pathInput = Read-Host "Model path (default: ./models/Qwen2.5-0.5B-Instruct)"
-    $idInput = Read-Host "Model id (default: openvino-local)"
+    $pathInput = Read-Host "Model path (default: ./models)"
+    $idInput = Read-Host "Model id (default: local-model)"
     if (-not [string]::IsNullOrWhiteSpace($pathInput)) { $modelPath = $pathInput.Trim() }
     if (-not [string]::IsNullOrWhiteSpace($idInput)) { $modelId = $idInput.Trim() }
 }
@@ -498,9 +604,9 @@ if (-not $NoLaunch) {
     $launch = Read-YesNo -Prompt "Launch control panel now?" -DefaultYes $true
     if ($launch) {
         if ($enablePerformanceMode) {
-            & (Join-Path $scriptDir "start_app.ps1") -ModelPath $modelPath -ApiPort $ApiPort -AppPort $AppPort -PerformanceMode
+            & (Join-Path $scriptDir "start_app.ps1") -ModelPath $modelPath -ApiPort $ApiPort -AppPort $AppPort -PerformanceMode -OpenBrowser
         } else {
-            & (Join-Path $scriptDir "start_app.ps1") -ModelPath $modelPath -ApiPort $ApiPort -AppPort $AppPort
+            & (Join-Path $scriptDir "start_app.ps1") -ModelPath $modelPath -ApiPort $ApiPort -AppPort $AppPort -OpenBrowser
         }
         if ($LASTEXITCODE -ne 0) {
             throw "start_app.ps1 failed"

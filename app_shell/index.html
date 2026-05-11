@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AcouLM</title>
-  <link rel="stylesheet" href="./styles.css?v=20260425e" />
+  <link rel="stylesheet" href="./styles.css?v=20260430a" />
 </head>
 <body>
   <header class="app-header glass">
@@ -19,7 +19,7 @@
     <div class="header-tools">
       <label class="base-url">
         API Base
-        <input id="apiBase" type="text" value="http://localhost:8000/v1" />
+        <input id="apiBase" type="text" value="http://127.0.0.1:8000/v1" />
       </label>
       <label class="theme-select-label">
         Appearance
@@ -67,25 +67,34 @@
       </div>
       <p class="hint" id="chatDeviceAvailability">Loaded devices: -</p>
 
-      <div class="terminal-chat-hint">
-        <p>Chat runs in the terminal only.</p>
-        <pre class="inline-cmd">acoulm</pre>
-        <p class="hint">Metrics (device, TTFT, TPOT, latency, RAM) print after each response in the terminal path.</p>
-        <details class="mode-descriptions">
-          <summary>Performance Mode Descriptions</summary>
-          <div class="mode-details">
-            <div class="mode-item">
-              <strong>BALANCED</strong>: Automatically selects the best available device (GPU → NPU → CPU) for optimal performance while maintaining reasonable power usage.
-            </div>
-            <div class="mode-item">
-              <strong>PERFORMANCE</strong>: Prioritizes speed by preferring GPU when available, maximizing inference throughput for demanding tasks.
-            </div>
-            <div class="mode-item">
-              <strong>BATTERY_SAVER</strong>: Optimizes for efficiency by preferring NPU (Neural Processing Unit) to minimize power consumption and heat generation.
-            </div>
-          </div>
-        </details>
+      <p class="hint chat-dual-hint">
+        Terminal chat. One-time setup: run <kbd>.\portable_setup.ps1 -NoLaunch</kbd> from the AcouLM folder. After that, just type <kbd>acoulm</kbd> (from any folder) to start the UI + API and open the robot chat.
+        Optional speed: run <kbd>.\start_app.ps1 -PerformanceMode</kbd> once to persist a faster default.
+      </p>
+      <pre id="chatOutput" class="output chat-transcript" aria-live="polite" style="display: none;"></pre>
+      <div class="chat-input-row" style="display: none;">
+        <label class="chat-input-label" for="chatInput">Message
+          <textarea id="chatInput" class="chat-input" rows="3" placeholder="Ask the local model... (Enter to send, Shift+Enter for newline)"></textarea>
+        </label>
+        <div class="chat-actions">
+          <button id="btnSendChat" type="button" class="primary">Send</button>
+          <button id="btnClearChat" type="button" class="ghost">Clear</button>
+        </div>
       </div>
+      <details class="mode-descriptions">
+        <summary>Performance mode descriptions</summary>
+        <div class="mode-details">
+          <div class="mode-item">
+            <strong>BALANCED</strong>: Automatically selects the best available device (GPU → NPU → CPU) for optimal performance while maintaining reasonable power usage.
+          </div>
+          <div class="mode-item">
+            <strong>PERFORMANCE</strong>: Prioritizes speed by preferring GPU when available, maximizing inference throughput for demanding tasks.
+          </div>
+          <div class="mode-item">
+            <strong>BATTERY_SAVER</strong>: Optimizes for efficiency by preferring NPU (Neural Processing Unit) to minimize power consumption and heat generation.
+          </div>
+        </div>
+      </details>
       <!-- device + policy controls -->
       <div class="row">
         <label>Device
@@ -367,7 +376,7 @@
       </ol>
 
       <div class="hint">Use a repo path such as <code>unsloth/gemma-4-E4B-it-GGUF</code> or another GGUF-compatible model. Your model must be downloaded locally before registry import.</div>
-      <div class="hint">To avoid downloading all repo versions, specify a single filename (e.g., <code>model-v1-4b-q4.gguf</code>). Leave blank to download everything.</div>
+      <div class="hint">Download exactly one file by default (recommended): specify a filename (e.g., <code>model-v1-4b-q4.gguf</code>).</div>
       <div class="hint"><strong>Where to find the filename:</strong> Go to <a href="https://huggingface.co/models" target="_blank" rel="noreferrer">huggingface.co</a>, browse to your model repo, then click the <strong>Files and versions</strong> tab. Look for a <code>.gguf</code> file (like <code>model-4b-q4.gguf</code>) and copy its exact name.</div>
       <div class="hint">Install the backend you want, then register it in <strong>Registry Explorer</strong> (Add Backend Wizard or manual fields under Registry Actions).</div>
 
@@ -377,7 +386,7 @@
       </div>
 
       <div class="row">
-        <label>Filename (optional) <input id="terminalModelFilename" type="text" placeholder="model-4b-q4.gguf (leave blank for all files)" /></label>
+        <label>Filename (required by default) <input id="terminalModelFilename" type="text" placeholder="model-4b-q4.gguf (or use * for full repo)" /></label>
       </div>
 
       <div class="row">
@@ -414,6 +423,6 @@
     </div>
   </dialog>
 
-  <script src="./app.js?v=20260624f"></script>
+  <script src="./app.js?v=20260430g"></script>
 </body>
 </html>

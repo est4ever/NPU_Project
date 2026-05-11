@@ -116,7 +116,7 @@ If you use a **non-empty** “Files/patterns” filter there (to fetch only some
 
 On a **new clone or new PC**, run `.\portable_setup.ps1` once before `.\start_app.ps1` so registries exist and paths are set. You still need **model weights** locally (not in this repository): OpenVINO **IR** and/or a **supported `.gguf`**, depending on your GenAI version; see [Model Notes](#model-notes) and [First-time setup](#first-time-setup).
 
-Start stack:
+Start stack (browser control panel + backend API):
 
 ```powershell
 .\start_app.ps1
@@ -141,15 +141,25 @@ Chat from terminal:
 .\npu_cli.ps1
 ```
 
-Shortcut command after running `.\portable_setup.ps1`:
+### One command launcher (`acoulm`)
+
+After running `.\portable_setup.ps1` once, you can use **one command** for daily use:
 
 ```powershell
 acoulm
 ```
 
-This opens terminal chat by default (`.\npu_cli.ps1 -Command chat`).
-`portable_setup.ps1` also installs a global `acoulm` launcher in `%USERPROFILE%\.local\bin`, so it works from any folder after opening a new terminal.
-`acoulm` is the supported command alias.
+`acoulm` starts the **control panel** (`http://localhost:5173`) and **backend API** (`http://localhost:8000/v1`) if needed, then opens **terminal chat**.
+
+`portable_setup.ps1` also installs a global `acoulm` launcher in `%USERPROFILE%\.local\bin` and sets `ACOULM_HOME`, so `acoulm` works from any folder after opening a new terminal.
+
+### Optional: make `acoulm` faster (persisted)
+
+Run once (writes `registry\performance_profile.json`):
+
+```powershell
+.\start_app.ps1 -PerformanceMode
+```
 
 Interactive chat commands are intentionally minimal:
 - `/status`

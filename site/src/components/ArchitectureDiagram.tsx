@@ -37,10 +37,12 @@ function FlowChip({
       : "border-accent/30 bg-accent/10 text-cyan-200";
 
   return (
-    <div className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 font-mono text-[11px] ${toneClass}`}>
-      <span>{from}</span>
+    <div
+      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 font-mono text-[11px] ${toneClass}`}
+      aria-label={`${from} to ${to}`}
+      title={`${from} to ${to}`}
+    >
       <ArrowRight size={12} />
-      <span>{to}</span>
     </div>
   );
 }
@@ -79,9 +81,12 @@ export function ArchitectureDiagram({ compact = false }: { compact?: boolean }) 
         <FlowChip from="Browser UI" to="API Layer" />
         <FlowChip from="API Layer" to="Runtime" />
         <FlowChip from="CLI" to="API" tone="violet" />
-        <span className="inline-flex items-center gap-2 rounded-full border border-line bg-[#0a0f1a] px-3 py-1.5 font-mono text-[11px] text-slate-300">
+        <span
+          className="inline-flex items-center gap-2 rounded-full border border-line bg-[#0a0f1a] px-3 py-1.5 font-mono text-[11px] text-slate-300"
+          aria-label="CPU, GPU, NPU"
+          title="CPU, GPU, NPU"
+        >
           <Binary size={12} className="text-accent" />
-          CPU | GPU | NPU
         </span>
       </div>
     </section>

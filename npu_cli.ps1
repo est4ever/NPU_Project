@@ -14,7 +14,7 @@
 #>
 
 param(
-    [string]$ApiBase = "http://localhost:8000",
+    [string]$ApiBase = "http://127.0.0.1:8000",
     [string]$Prompt  = "",
     [string]$Command = "",
     [string[]]$Arguments = @()
@@ -56,7 +56,7 @@ function Test-ConnectionFailure {
 
 function Write-BackendUnreachableHint {
     Write-Dim "  Hint: Nothing is listening at $ApiBase (or it is still starting). If you switched model/backend"
-    Write-Dim "  in the browser, wait ~5–10s and try again. Otherwise run .\start_app.ps1 or check the PowerShell"
+    Write-Dim "  in the browser, wait ~5-10s and try again. Otherwise run .\start_app.ps1 or check the PowerShell"
     Write-Dim "  window running run.ps1 for errors (bad entrypoint, crash on load, or wrong port)."
 }
 
@@ -91,6 +91,96 @@ function Write-JsonFile {
     $Data | ConvertTo-Json -Depth 10 | Set-Content -Path $Path -Encoding UTF8
 }
 
+function Test-GgufFileMagic {
+    param([string]$Path)
+    try {
+        $fs = [System.IO.File]::OpenRead($Path)
+        try {
+            $buf = New-Object byte[] 4
+            if ($fs.Read($buf, 0, 4) -lt 4) { return $false }
+            return ($buf[0] -eq 0x47 -and $buf[1] -eq 0x47 -and $buf[2] -eq 0x55 -and $buf[3] -eq 0x46)
+        } finally {
+            $fs.Dispose()
+        }
+    } catch {
+        return $false
+    }
+}
+
+function Get-GgufMinBytesHint {
+    param([string]$FileName)
+    $n = ($FileName + "").ToLowerInvariant()
+    # Rough lower bounds so truncated HTTP downloads are rejected (full Qwen2.5-3B Q4_K_M is ~1.9GB).
+    if ($n -match 'qwen2\.5-3b.*q4_k_m') { return [long]1200000000 }
+    if ($n -match 'qwen2\.5-3b') { return [long]500000000 }
+    return [long]0
+}
+
+function Assert-GgufDownloadOk {
+    param(
+        [string]$DestFile,
+        [string]$FileName
+    )
+    $len = (Get-Item -LiteralPath $DestFile).Length
+    $fs = [System.IO.File]::OpenRead($DestFile)
+    try {
+        $head = New-Object byte[] ([Math]::Min(512, [int]$len))
+        [void]$fs.Read($head, 0, $head.Length)
+    } finally {
+        $fs.Dispose()
+    }
+    if ($head.Length -ge 4 -and $head[0] -eq 0x3C) {
+        throw "Download looks like HTML (login page or wrong URL). Install 'hf' from Hugging Face or check repo/filename."
+    }
+    if (-not (Test-GgufFileMagic -Path $DestFile)) {
+        throw "File is not a valid GGUF (missing GGUF magic). Delete it and retry download."
+    }
+    $min = Get-GgufMinBytesHint -FileName $FileName
+    if ($min -gt 0 -and $len -lt $min) {
+        throw "GGUF looks incomplete ($len bytes; expected at least ~$min for this variant). Delete '$DestFile' and run download again with a stable connection."
+    }
+}
+
+function Find-ExistingModelFile {
+    param(
+        [string]$ModelsRoot,
+        [string]$TargetModelId,
+        [string]$FileName
+    )
+    if ([string]::IsNullOrWhiteSpace($FileName) -or $FileName -eq "*") {
+        return $null
+    }
+    if (-not (Test-Path -LiteralPath $ModelsRoot)) {
+        return $null
+    }
+    $targetFolder = Join-Path $ModelsRoot $TargetModelId
+    $targetResolved = [System.IO.Path]::GetFullPath($targetFolder).TrimEnd("\")
+    try {
+        $matches = Get-ChildItem -Path $ModelsRoot -Recurse -File -Filter $FileName -ErrorAction SilentlyContinue
+        foreach ($m in $matches) {
+            $parentResolved = [System.IO.Path]::GetFullPath($m.DirectoryName).TrimEnd("\")
+            if ($parentResolved -eq $targetResolved) {
+                continue
+            }
+            if ($FileName -like "*.gguf") {
+                try {
+                    Assert-GgufDownloadOk -DestFile $m.FullName -FileName $FileName
+                } catch {
+                    continue
+                }
+            }
+            $ownerId = Split-Path -Path $m.DirectoryName -Leaf
+            if (-not [string]::IsNullOrWhiteSpace($ownerId)) {
+                return [ordered]@{
+                    model_id  = $ownerId
+                    file_path = $m.FullName
+                }
+            }
+        }
+    } catch {}
+    return $null
+}
+
 function Download-Model {
     param(
         [string]$Repo,
@@ -101,19 +191,49 @@ function Download-Model {
     if ([string]::IsNullOrWhiteSpace($Repo)) {
         throw "Model repo is required for download"
     }
+    $Repo = ($Repo + "").Trim().Trim("/")
+    if ([string]::IsNullOrWhiteSpace($Repo)) {
+        throw "Model repo cannot be empty after trimming. Use form: org/model"
+    }
+    if ($Repo -notmatch ".+/.+") {
+        throw "Model repo must be in Hugging Face format 'org/model' (got '$Repo')"
+    }
     if ([string]::IsNullOrWhiteSpace($ModelId)) {
         $ModelId = ($Repo -split "/")[-1]
+    }
+    $ModelId = ($ModelId + "").Trim()
+    if ([string]::IsNullOrWhiteSpace($ModelId) -or $ModelId -in @(".", "..")) {
+        throw "Refusing to use unsafe model id '$ModelId'. Provide a non-empty local id under .\models\."
+    }
+    if ($ModelId.Contains("\") -or $ModelId.Contains("/")) {
+        throw "Model id must be a single folder name (no path separators): '$ModelId'"
     }
 
     $scriptDir = Get-ScriptDir
     $modelsRoot = Join-Path $scriptDir "models"
     $target = Join-Path $modelsRoot $ModelId
-    if (-not (Test-Path $target)) {
-        New-Item -ItemType Directory -Path $target -Force | Out-Null
+    $rootResolved = [System.IO.Path]::GetFullPath($modelsRoot).TrimEnd("\")
+    $targetResolved = [System.IO.Path]::GetFullPath($target).TrimEnd("\")
+    if ($targetResolved -eq $rootResolved) {
+        throw "Refusing to use models root as target: $targetResolved"
     }
 
     if ([string]::IsNullOrWhiteSpace($FileName)) {
-        Write-Host "Downloading model '$Repo' into '$target'..." -ForegroundColor Cyan
+        throw "A filename is required so you pick one variant (not every quantization). Use: -Arguments ""download"",""<repo>"",""<local-id>"",""<filename>"" (or '*' for full repo). Example GGUF: ...,""Qwen2.5-3B-Instruct-Q4_K_M.gguf"""
+    }
+    if ($FileName -ne "*") {
+        $existing = Find-ExistingModelFile -ModelsRoot $modelsRoot -TargetModelId $ModelId -FileName $FileName
+        if ($null -ne $existing) {
+            Write-Info "Reusing existing model file: $($existing.file_path)"
+            Write-Dim  "  Skipping duplicate download. Existing local-id: $($existing.model_id)"
+            return $existing.model_id
+        }
+    }
+    if (-not (Test-Path $target)) {
+        New-Item -ItemType Directory -Path $target -Force | Out-Null
+    }
+    if ($FileName -eq "*") {
+        Write-Host "Downloading full repo '$Repo' into '$target' (explicit full snapshot)..." -ForegroundColor Cyan
     } else {
         Write-Host "Downloading model file '$FileName' from '$Repo' into '$target'..." -ForegroundColor Cyan
     }
@@ -121,7 +241,7 @@ function Download-Model {
     $hfCmd = Get-Command hf -ErrorAction SilentlyContinue
     if ($hfCmd) {
         $env:PYTHONIOENCODING = 'utf-8'
-        if ([string]::IsNullOrWhiteSpace($FileName)) {
+        if ($FileName -eq "*") {
             & $hfCmd.Source download $Repo --local-dir "$target"
         } else {
             & $hfCmd.Source download $Repo $FileName --local-dir "$target"
@@ -129,13 +249,19 @@ function Download-Model {
         if ($LASTEXITCODE -ne 0) {
             throw "hf download failed with exit code $LASTEXITCODE"
         }
+        if ($FileName -ne "*" -and ($FileName -like "*.gguf")) {
+            $df = Join-Path $target $FileName
+            if (Test-Path -LiteralPath $df) {
+                Assert-GgufDownloadOk -DestFile $df -FileName $FileName
+            }
+        }
         return $ModelId
     }
 
     $hfCli = Get-Command huggingface-cli -ErrorAction SilentlyContinue
     if ($hfCli) {
         $env:PYTHONIOENCODING = 'utf-8'
-        if ([string]::IsNullOrWhiteSpace($FileName)) {
+        if ($FileName -eq "*") {
             & $hfCli.Source download $Repo --local-dir "$target"
         } else {
             & $hfCli.Source download $Repo $FileName --local-dir "$target"
@@ -143,12 +269,58 @@ function Download-Model {
         if ($LASTEXITCODE -ne 0) {
             throw "huggingface-cli download failed with exit code $LASTEXITCODE"
         }
+        if ($FileName -ne "*" -and ($FileName -like "*.gguf")) {
+            $df = Join-Path $target $FileName
+            if (Test-Path -LiteralPath $df) {
+                Assert-GgufDownloadOk -DestFile $df -FileName $FileName
+            }
+        }
         return $ModelId
+    }
+
+    # Direct HTTPS: one file only (good when hf / huggingface-cli are not installed).
+    if ($FileName -ne "*") {
+        $destFile = Join-Path $target $FileName
+        $needFetch = -not (Test-Path $destFile)
+        if (-not $needFetch -and ($FileName -like "*.gguf")) {
+            try {
+                Assert-GgufDownloadOk -DestFile $destFile -FileName $FileName
+            } catch {
+                Write-Err $_.Exception.Message
+                Remove-Item -LiteralPath $destFile -Force -ErrorAction SilentlyContinue
+                $needFetch = $true
+            }
+        }
+        if ($needFetch) {
+            $resolveUrl = "https://huggingface.co/$Repo/resolve/main/$FileName"
+            Write-Info "Trying direct download (single file): $resolveUrl"
+            Write-Dim "  Large files may take several minutes..."
+            try {
+                if (-not (Test-Path $target)) {
+                    New-Item -ItemType Directory -Path $target -Force | Out-Null
+                }
+                Invoke-WebRequest -Uri $resolveUrl -OutFile $destFile -UseBasicParsing -TimeoutSec 7200
+                if (Test-Path $destFile) {
+                    if ($FileName -like "*.gguf") {
+                        Assert-GgufDownloadOk -DestFile $destFile -FileName $FileName
+                    }
+                    Write-Success "Downloaded to $destFile"
+                    return $ModelId
+                }
+                Remove-Item -LiteralPath $destFile -Force -ErrorAction SilentlyContinue
+            } catch {
+                Write-Dim "  Direct download failed (gated repo, timeout, or wrong file): $($_.Exception.Message)"
+                Remove-Item -LiteralPath $destFile -Force -ErrorAction SilentlyContinue
+            }
+        } else {
+            Write-Success "Using existing file: $destFile"
+            return $ModelId
+        }
     }
 
     $gitCmd = Get-Command git -ErrorAction SilentlyContinue
     if (-not $gitCmd) {
-        throw "Neither huggingface-cli nor git is available. Install one of them to download model files."
+        throw "Install `hf` (pip install huggingface_hub) or Git + Git LFS, or use a public repo for direct download."
     }
 
     if (Test-Path (Join-Path $target ".git")) {
@@ -158,6 +330,12 @@ function Download-Model {
             if ($LASTEXITCODE -ne 0) {
                 throw "git pull failed with exit code $LASTEXITCODE"
             }
+            if ($FileName -ne "*") {
+                git lfs pull --include "$FileName"
+                if ($LASTEXITCODE -ne 0) {
+                    throw "git lfs pull --include failed with exit code $LASTEXITCODE"
+                }
+            }
         } finally {
             Pop-Location
         }
@@ -165,9 +343,37 @@ function Download-Model {
         if (Test-Path $target) {
             Remove-Item -Recurse -Force $target
         }
-        git clone "https://huggingface.co/$Repo" $target
-        if ($LASTEXITCODE -ne 0) {
-            throw "git clone failed with exit code $LASTEXITCODE"
+        $prevLfs = $env:GIT_LFS_SKIP_SMUDGE
+        $env:GIT_LFS_SKIP_SMUDGE = "1"
+        try {
+            git clone "https://huggingface.co/$Repo" $target
+            if ($LASTEXITCODE -ne 0) {
+                throw "git clone failed with exit code $LASTEXITCODE"
+            }
+            if ($FileName -ne "*") {
+                Push-Location $target
+                try {
+                    git lfs pull --include "$FileName"
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "git lfs pull --include failed with exit code $LASTEXITCODE"
+                    }
+                } finally {
+                    Pop-Location
+                }
+            }
+        } finally {
+            if ($null -eq $prevLfs) {
+                Remove-Item Env:\GIT_LFS_SKIP_SMUDGE -ErrorAction SilentlyContinue
+            } else {
+                $env:GIT_LFS_SKIP_SMUDGE = $prevLfs
+            }
+        }
+    }
+
+    if ($FileName -ne "*") {
+        $finalFile = Join-Path $target $FileName
+        if (($FileName -like "*.gguf") -and (Test-Path -LiteralPath $finalFile)) {
+            Assert-GgufDownloadOk -DestFile $finalFile -FileName $FileName
         }
     }
 
@@ -189,16 +395,16 @@ function Process-Command {
             $sub = $Arguments[0].ToLower()
             switch ($sub) {
                 "download" {
-                    if ($Arguments.Count -lt 2) {
-                        Write-Err "Usage: -Command model -Arguments \"download\",\"<huggingface_repo>\",\"<local-id>\",\"[filename]\""
-                        Write-Err "  filename is optional - if omitted, all files are downloaded"
+                    if ($Arguments.Count -lt 4) {
+                        Write-Err "Usage: -Command model -Arguments \"download\",\"<huggingface_repo>\",\"<local-id>\",\"<filename>\""
+                        Write-Err "  use filename='*' only if you explicitly want full repo download"
                         return 1
                     }
                     $repo = $Arguments[1]
                     $id = if ($Arguments.Count -ge 3) { $Arguments[2] } else { "" }
                     $file = if ($Arguments.Count -ge 4) { $Arguments[3] } else { "" }
                     $downloadedId = Download-Model -Repo $repo -ModelId $id -FileName $file
-                    Write-Success "Downloaded model '$repo' to './models/$downloadedId'"
+                    Write-Success "Model '$repo' available at './models/$downloadedId'"
                     return 0
                 }
                 "list" {
@@ -309,11 +515,12 @@ function Show-RuntimeBanner {
 # ---------------------------------------------------------------------------
 
 function Show-AcouLMSplash {
+    # ASCII-only frames so Windows consoles (e.g. code page 950) do not strip the "logo".
     $danceFrames = @(
-        "[■_■] <|>",
-        "[■_■] \\|/",
-        "[■_■] <|>",
-        "[■_■] /|\\"
+        "[@_@] <|>",
+        "[@_@] \\|/",
+        "[@_@] <|>",
+        "[@_@] /|\\"
     )
     $prefetchedStatus = $null
 
@@ -326,27 +533,42 @@ function Show-AcouLMSplash {
     )
     Write-Host ""
 
-    # Keep robot dancing until the chat backend is actually reachable.
-    $deadline = (Get-Date).AddSeconds(35)
+    # Keep robot dancing briefly while probing readiness, but do not block chat startup for minutes.
+    $waitSec = 12
+    try {
+        $envWait = [string]$env:ACOULM_BACKEND_WAIT_SEC
+        if (-not [string]::IsNullOrWhiteSpace($envWait)) {
+            $parsed = 0
+            if ([int]::TryParse($envWait.Trim(), [ref]$parsed) -and $parsed -gt 0) {
+                $waitSec = $parsed
+            }
+        }
+    } catch {}
+    $deadline = (Get-Date).AddSeconds($waitSec)
     $minFrames = 10
+    $maxFrames = [math]::Max($minFrames, [int]($waitSec * 5))
     $i = 0
     while ((Get-Date) -lt $deadline) {
-        try {
-            # Use a short timeout so animation stays responsive while backend starts.
-            $prefetchedStatus = Invoke-RestMethod -Uri "$ApiBase/v1/cli/status" -Method Get -TimeoutSec 1 -ErrorAction Stop
-        } catch {}
+        if (($i % 5) -eq 0) {
+            try {
+                $prefetchedStatus = Invoke-RestMethod -Uri "$ApiBase/v1/cli/status" -Method Get -TimeoutSec 2 -ErrorAction Stop
+            } catch {}
+        }
         $frame = $danceFrames[$i % $danceFrames.Count]
         Write-Host -NoNewline ("`r  AcouLM " + $frame + "  ")
-        Start-Sleep -Milliseconds 60
+        Start-Sleep -Milliseconds 200
         $i++
         if ($null -ne $prefetchedStatus -and $i -ge $minFrames) {
+            break
+        }
+        if ($i -ge $maxFrames) {
             break
         }
     }
 
     # Erase dance line so it disappears after startup.
     Write-Host -NoNewline "`r"
-    Write-Host -NoNewline (" " * 52)
+    Write-Host -NoNewline (" " * 64)
     Write-Host "`r"
 
     foreach ($line in $art) {
@@ -416,30 +638,62 @@ function Send-ChatMessage {
         model       = $modelId
         messages    = @(@{ role = "user"; content = $UserPrompt })
         stream      = $false
-        temperature = 0.7
-        max_tokens  = 512
+        temperature = 0.3
+        max_tokens  = 256
     }
 
-    try {
-        $resp = Invoke-RestMethod `
+    $sendOnce = {
+        Invoke-RestMethod `
             -Uri        "$ApiBase/v1/chat/completions" `
             -Method     Post `
             -Headers    @{ "Content-Type" = "application/json"; "x-npu-cli" = "true" } `
             -Body       ($body | ConvertTo-Json -Depth 8 -Compress) `
             -TimeoutSec 120 `
             -ErrorAction Stop
+    }
 
+    try {
+        $resp = & $sendOnce
         $content = $resp.choices[0].message.content
         Write-Host ""
         Write-Host $content
     } catch {
-        Write-Err (Get-ApiErrorMessage -Exception $_)
         if (Test-ConnectionFailure -Exception $_) {
             Write-Host ""
-            Write-BackendUnreachableHint
+            Write-Dim "  Backend is still warming up - waiting up to 45s, then retrying once..."
+            $deadline = (Get-Date).AddSeconds(45)
+            $ready = $false
+            while ((Get-Date) -lt $deadline) {
+                try {
+                    $null = Invoke-RestMethod -Uri "$ApiBase/v1/health" -Method Get -TimeoutSec 2 -ErrorAction Stop
+                    $ready = $true
+                    break
+                } catch {}
+                Start-Sleep -Milliseconds 1000
+            }
+            if ($ready) {
+                try {
+                    $resp = & $sendOnce
+                    $content = $resp.choices[0].message.content
+                    Write-Host ""
+                    Write-Host $content
+                } catch {
+                    Write-Err (Get-ApiErrorMessage -Exception $_)
+                    Write-Host ""
+                    return
+                }
+            } else {
+                Write-Err (Get-ApiErrorMessage -Exception $_)
+                Write-Host ""
+                Write-BackendUnreachableHint
+                Write-Host ""
+                return
+            }
+        } else {
+            Write-Err (Get-ApiErrorMessage -Exception $_)
+            Write-Host ""
+            return
         }
-        Write-Host ""
-        return
     }
 
     Show-MetricsBlock

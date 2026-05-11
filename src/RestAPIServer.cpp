@@ -450,6 +450,117 @@ json load_models_registry() {
     if (!reg.contains("selected_model") || !reg["selected_model"].is_string()) {
         reg["selected_model"] = "openvino-local";
     }
+
+    auto trim_ws = [](const std::string& s) {
+        const auto begin = std::find_if_not(s.begin(), s.end(), [](unsigned char ch) { return std::isspace(ch) != 0; });
+        if (begin == s.end()) {
+            return std::string();
+        }
+        const auto end = std::find_if_not(s.rbegin(), s.rend(), [](unsigned char ch) { return std::isspace(ch) != 0; }).base();
+        return std::string(begin, end);
+    };
+    auto lower = [](std::string s) {
+        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return s;
+    };
+    auto strip_suffixes = [&](std::string key) {
+        static const std::vector<std::string> suffixes = {
+            "-openvino-ir", "-ov-ir", "-openvino", "-safetensors", "-gguf", "-hf"
+        };
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            for (const auto& suffix : suffixes) {
+                if (key.size() > suffix.size() &&
+                    key.compare(key.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                    key.erase(key.size() - suffix.size());
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        return key;
+    };
+    auto model_key = [&](const json& item) {
+        std::string id = lower(trim_ws(item.value("id", "")));
+        if (!id.empty()) {
+            return strip_suffixes(id);
+        }
+        std::string raw_path = trim_ws(item.value("path", ""));
+        if (raw_path.empty()) {
+            return std::string();
+        }
+        std::filesystem::path p(raw_path);
+        std::filesystem::path leaf = p.filename();
+        if (leaf.empty()) {
+            leaf = p;
+        }
+        std::string name = lower(leaf.string());
+        if (!leaf.extension().string().empty()) {
+            name = lower(leaf.stem().string());
+        }
+        return strip_suffixes(name);
+    };
+    auto format_rank = [&](const json& item) {
+        const std::string fmt = lower(trim_ws(item.value("format", "")));
+        if (fmt == "openvino" || fmt == "ir") return 0;
+        if (fmt == "gguf") return 1;
+        if (fmt == "onnx") return 2;
+        if (fmt == "safetensors" || fmt == "hf") return 3;
+        return 4;
+    };
+
+    const std::string selected = reg.value("selected_model", "");
+    std::map<std::string, json> best_by_family;
+    std::vector<std::string> insertion_order;
+    for (const auto& item : reg["models"]) {
+        if (!item.is_object()) {
+            continue;
+        }
+        std::string key = model_key(item);
+        if (key.empty()) {
+            key = "__id__:" + lower(trim_ws(item.value("id", "")));
+        }
+        auto it = best_by_family.find(key);
+        if (it == best_by_family.end()) {
+            best_by_family.emplace(key, item);
+            insertion_order.push_back(key);
+            continue;
+        }
+
+        const std::string current_id = it->second.value("id", "");
+        const std::string candidate_id = item.value("id", "");
+        const bool current_selected = (!selected.empty() && current_id == selected);
+        const bool candidate_selected = (!selected.empty() && candidate_id == selected);
+        if ((!current_selected && candidate_selected) ||
+            (current_selected == candidate_selected && format_rank(item) < format_rank(it->second))) {
+            it->second = item;
+        }
+    }
+
+    json deduped = json::array();
+    for (const auto& key : insertion_order) {
+        auto it = best_by_family.find(key);
+        if (it != best_by_family.end()) {
+            deduped.push_back(it->second);
+        }
+    }
+    reg["models"] = deduped;
+
+    if (!selected.empty()) {
+        bool has_selected = false;
+        for (const auto& item : reg["models"]) {
+            if (item.is_object() && item.value("id", "") == selected) {
+                has_selected = true;
+                break;
+            }
+        }
+        if (!has_selected && !reg["models"].empty()) {
+            reg["selected_model"] = reg["models"][0].value("id", "");
+        }
+    }
     return reg;
 }
 
@@ -1878,8 +1989,33 @@ void RestAPIServer::handle_cli_model_import(const httplib::Request& req, httplib
             return;
         }
 
+        auto strip_suffixes = [](std::string key) {
+            static const std::vector<std::string> suffixes = {
+                "-openvino-ir", "-ov-ir", "-openvino", "-safetensors", "-gguf", "-hf"
+            };
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                for (const auto& suffix : suffixes) {
+                    if (key.size() > suffix.size() &&
+                        key.compare(key.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                        key.erase(key.size() - suffix.size());
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+            return key;
+        };
+        auto model_family = [&](const std::string& raw_id) {
+            return strip_suffixes(to_lower_copy(trim_copy(raw_id)));
+        };
+
         json models_reg = load_models_registry();
         bool updated = false;
+        bool merged_family = false;
+        std::string merged_from_id;
+        const std::string incoming_family = model_family(id);
         for (auto& item : models_reg["models"]) {
             if (item.value("id", "") == id) {
                 item["path"] = path;
@@ -1888,6 +2024,29 @@ void RestAPIServer::handle_cli_model_import(const httplib::Request& req, httplib
                 item["status"] = status;
                 updated = true;
                 break;
+            }
+        }
+
+        if (!updated && !incoming_family.empty()) {
+            for (auto& item : models_reg["models"]) {
+                const std::string existing_id = item.value("id", "");
+                if (existing_id.empty()) {
+                    continue;
+                }
+                if (model_family(existing_id) == incoming_family) {
+                    merged_family = true;
+                    merged_from_id = existing_id;
+                    item["id"] = id;
+                    item["path"] = path;
+                    item["format"] = format;
+                    item["backend"] = backend;
+                    item["status"] = status;
+                    if (models_reg.value("selected_model", "") == merged_from_id) {
+                        models_reg["selected_model"] = id;
+                    }
+                    updated = true;
+                    break;
+                }
             }
         }
 
@@ -1910,6 +2069,8 @@ void RestAPIServer::handle_cli_model_import(const httplib::Request& req, httplib
         json body_out = {
             {"success", true},
             {"updated", updated},
+            {"merged_family", merged_family},
+            {"merged_from_id", merged_family ? json(merged_from_id) : json(nullptr)},
             {"id", id},
             {"format", format},
             {"note", "Model registered. Restart stack to load a newly selected model."}
@@ -2472,6 +2633,34 @@ void RestAPIServer::handle_cli_models_discover(const httplib::Request&, httplib:
     try {
         const json models = load_models_registry();
         std::set<std::string> known;
+        std::set<std::string> known_family;
+        auto lower = [](std::string s) {
+            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            return s;
+        };
+        auto strip_suffixes = [](std::string key) {
+            static const std::vector<std::string> suffixes = {
+                "-openvino-ir", "-ov-ir", "-openvino", "-safetensors", "-gguf", "-hf"
+            };
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                for (const auto& suffix : suffixes) {
+                    if (key.size() > suffix.size() &&
+                        key.compare(key.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                        key.erase(key.size() - suffix.size());
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+            return key;
+        };
+        auto model_family_key = [&](const std::string& raw_name) {
+            return strip_suffixes(lower(trim_copy(raw_name)));
+        };
         const std::filesystem::path models_base = (project_root_path() / "models").lexically_normal();
         for (const auto& m : models["models"]) {
             if (!m.is_object()) {
@@ -2506,8 +2695,11 @@ void RestAPIServer::handle_cli_models_discover(const httplib::Request&, httplib:
                         const size_t nxt = child.find_first_of("/\\");
                         if (nxt == std::string::npos) {
                             known.insert(child);
+                            known_family.insert(model_family_key(child));
                         } else {
-                            known.insert(child.substr(0, nxt));
+                            const std::string top = child.substr(0, nxt);
+                            known.insert(top);
+                            known_family.insert(model_family_key(top));
                         }
                     }
                 } catch (...) {
@@ -2518,8 +2710,11 @@ void RestAPIServer::handle_cli_models_discover(const httplib::Request&, httplib:
                 const size_t nxt = rest.find_first_of("/\\");
                 if (nxt == std::string::npos) {
                     known.insert(rest);
+                    known_family.insert(model_family_key(rest));
                 } else {
-                    known.insert(rest.substr(0, nxt));
+                    const std::string top = rest.substr(0, nxt);
+                    known.insert(top);
+                    known_family.insert(model_family_key(top));
                 }
             }
         }
@@ -2531,7 +2726,8 @@ void RestAPIServer::handle_cli_models_discover(const httplib::Request&, httplib:
                     continue;
                 }
                 const std::string name = e.path().filename().string();
-                if (known.find(name) == known.end()) {
+                const std::string family = model_family_key(name);
+                if (known.find(name) == known.end() && known_family.find(family) == known_family.end()) {
                     arr.push_back({ {"folder", name}, {"path", "./models/" + name} });
                 }
             }

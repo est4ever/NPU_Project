@@ -80,14 +80,19 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     button.textContent = busy ? busyText : button.dataset.originalText;
   }
 
+  function sanitizeBaseUrl(value) {
+    return String(value || "").trim().replace(/\/+$/, "");
+  }
+
   function baseUrl() {
-    return el("apiBase").value.replace(/\/$/, "");
+    const input = el("apiBase");
+    return sanitizeBaseUrl(input ? input.value : defaultApiBase());
   }
 
   function setApiBase(url) {
     const input = el("apiBase");
     if (!input) return;
-    input.value = String(url || "").replace(/\/$/, "");
+    input.value = sanitizeBaseUrl(url);
     restartCliEvents();
   }
 
@@ -332,12 +337,18 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       setConnectionState("online");
       return payload;
     } catch (err) {
-      // If the configured API base is wrong, auto-heal to localhost backend once.
-      const fallbackBase = defaultApiBase();
-      if (allowFallback && currentBase !== fallbackBase) {
-        setApiBase(fallbackBase);
-        addActivity(`API base reset to ${fallbackBase}`, "busy");
-        return requestJson(path, options, false);
+      // If the configured API base is wrong/unreachable, auto-heal to known local defaults once.
+      const fallbackCandidates = [
+        defaultApiBase(),
+        "http://127.0.0.1:8000/v1",
+      ].map(sanitizeBaseUrl);
+      if (allowFallback) {
+        for (const fallbackBase of fallbackCandidates) {
+          if (!fallbackBase || fallbackBase === currentBase) continue;
+          setApiBase(fallbackBase);
+          addActivity(`API base reset to ${fallbackBase}`, "busy");
+          return requestJson(path, options, false);
+        }
       }
       setConnectionState("offline", "request failed");
       throw err;
@@ -1367,10 +1378,13 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         throw new Error("Select a target device first");
       }
       addActivity("Checking NPU route...", "busy");
-      await requestJson("/cli/device/load", {
-        method: "POST",
-        body: JSON.stringify({ device: target }),
-      });
+      // AUTO is a policy-level target and should not be preloaded as a physical device.
+      if (target !== "AUTO") {
+        await requestJson("/cli/device/load", {
+          method: "POST",
+          body: JSON.stringify({ device: target }),
+        });
+      }
       const result = await requestJson("/cli/device/switch", {
         method: "POST",
         body: JSON.stringify({ device: target }),
@@ -1811,11 +1825,11 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     if (!preview) return;
     const localId = id || (repo.split("/").pop() || "my-model");
     if (!repo) {
-      preview.textContent = `.\\npu_cli.ps1 -Command model -Arguments "download","<repo>","<local-id>","[filename]"`;
+      preview.textContent = `.\\npu_cli.ps1 -Command model -Arguments "download","<repo>","<local-id>","<filename-or-*>"`;
     } else if (filename) {
       preview.textContent = `.\\npu_cli.ps1 -Command model -Arguments "download","${repo}","${localId}","${filename}"`;
     } else {
-      preview.textContent = `.\\npu_cli.ps1 -Command model -Arguments "download","${repo}","${localId}"`;
+      preview.textContent = `.\\npu_cli.ps1 -Command model -Arguments "download","${repo}","${localId}","<filename-or-*>"`;
     }
   }
 
@@ -1830,16 +1844,133 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     }
   }
 
-  async function summarizeContext() {
+  async function getChatModelId() {
+    let modelId = "openvino";
+    if (statusCache?.selected_model) {
+      modelId = statusCache.selected_model;
+    } else {
+      try {
+        const s = await requestJson("/cli/status", { method: "GET" });
+        if (s && s.selected_model) {
+          modelId = s.selected_model;
+        }
+      } catch {
+        // keep default
+      }
+    }
+    return modelId;
+  }
+
+  async function sendBrowserChat() {
+    const input = el("chatInput");
+    const output = el("chatOutput");
+    if (!input || !output || isChatBusy) {
+      return;
+    }
+    const text = String(input.value || "").trim();
+    if (!text) {
+      return;
+    }
+    isChatBusy = true;
+    setButtonBusy("btnSendChat", true, "Sending...");
+    const t0 = nowStamp();
+    output.textContent += `${output.textContent ? "\n\n" : ""}[${t0}] You:\n${text}\n`;
+    input.value = "";
+    output.scrollTop = output.scrollHeight;
+    try {
+      const modelId = await getChatModelId();
+      const resp = await requestJson("/chat/completions", {
+        method: "POST",
+        headers: { "x-npu-cli": "true" },
+        body: JSON.stringify({
+          model: modelId,
+          messages: [{ role: "user", content: text }],
+          stream: false,
+          temperature: 0.7,
+          max_tokens: 512,
+        }),
+      });
+      const content =
+        resp && resp.choices && resp.choices[0] && resp.choices[0].message
+          ? String(resp.choices[0].message.content || "")
+          : "(no content)";
+      output.textContent += `[${nowStamp()}] Assistant:\n${content}\n`;
+      addActivity("Chat reply received", "ready");
+    } catch (err) {
+      output.textContent += `[${nowStamp()}] Error: ${String(err.message || err)}\n`;
+      addActivity(`Chat failed: ${String(err.message || err)}`, "error");
+    } finally {
+      isChatBusy = false;
+      setButtonBusy("btnSendChat", false);
+      output.scrollTop = output.scrollHeight;
+      try {
+        await refreshStatus();
+      } catch {
+        // ignore
+      }
+      try {
+        await fetchMetrics(true, "last");
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  function clearBrowserChat() {
     const output = el("chatOutput");
     if (output) {
-      output.textContent = [
-        "Summarize is disabled in terminal-chat mode.",
-        "Use terminal chat instead:",
-        ".\\npu_cli.ps1 -Command chat -Arguments \"Summarize the latest context and key decisions\"",
-      ].join("\n");
+      output.textContent = "";
     }
-    addActivity("Summarize disabled: terminal-chat mode", "busy");
+    addActivity("Chat cleared", "busy");
+  }
+
+  async function summarizeContext() {
+    const output = el("chatOutput");
+    if (!output) {
+      return;
+    }
+    const history = String(output.textContent || "").trim();
+    if (!history) {
+      setSystemFeedback("Nothing to summarize — send a message in chat first.", "neutral");
+      return;
+    }
+    if (isChatBusy) {
+      setSystemFeedback("Wait for the current chat to finish.", "busy");
+      return;
+    }
+    isChatBusy = true;
+    setButtonBusy("btnSendChat", true, "Summarizing...");
+    try {
+      const modelId = await getChatModelId();
+      const resp = await requestJson("/chat/completions", {
+        method: "POST",
+        headers: { "x-npu-cli": "true" },
+        body: JSON.stringify({
+          model: modelId,
+          messages: [
+            {
+              role: "user",
+              content: `Summarize the following conversation transcript in 5-8 bullet points. Be concise.\n\n---\n${history}\n---`,
+            },
+          ],
+          stream: false,
+          temperature: 0.3,
+          max_tokens: 512,
+        }),
+      });
+      const content =
+        resp && resp.choices && resp.choices[0] && resp.choices[0].message
+          ? String(resp.choices[0].message.content || "")
+          : "(no content)";
+      output.textContent += `\n\n[${nowStamp()}] Summary:\n${content}\n`;
+      addActivity("Summary added to chat", "ready");
+    } catch (err) {
+      setSystemFeedback(`Summarize failed: ${String(err.message || err)}`, "error");
+    } finally {
+      isChatBusy = false;
+      setButtonBusy("btnSendChat", false);
+      output.scrollTop = output.scrollHeight;
+    }
   }
 
   async function probeConnection() {
@@ -2930,9 +3061,10 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       if (!node) {
         return;
       }
+      node.value = sanitizeBaseUrl(node.value || defaultApiBase());
       clearTimeout(apiBaseSaveTimer);
       apiBaseSaveTimer = setTimeout(() => {
-        savePrefs({ apiBase: node.value || defaultApiBase() });
+        savePrefs({ apiBase: sanitizeBaseUrl(node.value || defaultApiBase()) });
       }, 400);
     });
 
@@ -2960,6 +3092,20 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     on("btnPasteImport", "click", () => {
       void pasteImportFromClipboard();
     });
+
+    on("btnSendChat", "click", () => {
+      void sendBrowserChat();
+    });
+    on("btnClearChat", "click", () => clearBrowserChat());
+    const chatInputEl = el("chatInput");
+    if (chatInputEl) {
+      chatInputEl.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" && !ev.shiftKey) {
+          ev.preventDefault();
+          void sendBrowserChat();
+        }
+      });
+    }
 
     setRuntimeStrip();
     bindGlobalShortcuts();

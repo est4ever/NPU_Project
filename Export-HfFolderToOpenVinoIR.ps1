@@ -25,9 +25,22 @@ function Get-ProjectPythonExe {
 
 function Get-OptimumCliExe {
     param([string]$PythonExe)
-    $dir = Split-Path -Parent $PythonExe
+    $dir = $null
+    if (-not [string]::IsNullOrWhiteSpace($PythonExe) -and $PythonExe.Contains("\")) {
+        $dir = Split-Path -Parent $PythonExe
+    } else {
+        $pyCmd = Get-Command $PythonExe -ErrorAction SilentlyContinue
+        if ($pyCmd -and -not [string]::IsNullOrWhiteSpace($pyCmd.Source)) {
+            $dir = Split-Path -Parent $pyCmd.Source
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($dir)) { return $null }
     $cli = Join-Path $dir "optimum-cli.exe"
     if (Test-Path -LiteralPath $cli) { return $cli }
+    $cmd = Get-Command "optimum-cli" -ErrorAction SilentlyContinue
+    if ($cmd -and -not [string]::IsNullOrWhiteSpace($cmd.Source)) { return $cmd.Source }
+    $cmdExe = Get-Command "optimum-cli.exe" -ErrorAction SilentlyContinue
+    if ($cmdExe -and -not [string]::IsNullOrWhiteSpace($cmdExe.Source)) { return $cmdExe.Source }
     return $null
 }
 
@@ -82,9 +95,22 @@ function Invoke-NativeCommandCapture {
     }
 }
 
-$HfModelDir = [System.IO.Path]::GetFullPath($HfModelDir)
-$IrOutputDir = [System.IO.Path]::GetFullPath($IrOutputDir)
 $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
+function Resolve-PathFromRoot {
+    param(
+        [string]$RawPath,
+        [string]$Root
+    )
+    if ([string]::IsNullOrWhiteSpace($RawPath)) {
+        throw "[IR] Path argument cannot be empty."
+    }
+    if ([System.IO.Path]::IsPathRooted($RawPath)) {
+        return [System.IO.Path]::GetFullPath($RawPath)
+    }
+    return [System.IO.Path]::GetFullPath((Join-Path $Root $RawPath))
+}
+$HfModelDir = Resolve-PathFromRoot -RawPath $HfModelDir -Root $ProjectRoot
+$IrOutputDir = Resolve-PathFromRoot -RawPath $IrOutputDir -Root $ProjectRoot
 
 if (-not (Test-Path -LiteralPath $HfModelDir -PathType Container)) {
     throw "[IR] Model folder not found: $HfModelDir"
@@ -147,12 +173,17 @@ New-Item -ItemType Directory -Path $tmpOut -Force | Out-Null
 
 $python = Get-ProjectPythonExe -Root $ProjectRoot
 $cli = Get-OptimumCliExe -PythonExe $python
+$cliPrefixArgs = @()
 if (-not $cli) {
     Install-OptimumOpenVinoExport -PythonExe $python
     $cli = Get-OptimumCliExe -PythonExe $python
 }
 if (-not $cli) {
-    throw "[IR] optimum-cli.exe not found next to $python after install."
+    # Windows Store Python often installs scripts in a separate user Scripts folder.
+    # Fall back to invoking the module directly.
+    $cli = $python
+    $cliPrefixArgs = @("-m", "optimum.commands.optimum_cli")
+    Write-Host "[IR] optimum-cli executable not found; using python module fallback." -ForegroundColor Yellow
 }
 
 $exportArgs = @(
@@ -166,8 +197,9 @@ if ($TrustRemoteCode) {
 }
 $exportArgs += $tmpOut
 
-Write-Host "[IR] optimum-cli $($exportArgs -join ' ')" -ForegroundColor Cyan
-$firstRun = Invoke-NativeCommandCapture -ExePath $cli -CommandArgs $exportArgs
+$firstArgs = @($cliPrefixArgs + $exportArgs)
+Write-Host "[IR] export command: $cli $($firstArgs -join ' ')" -ForegroundColor Cyan
+$firstRun = Invoke-NativeCommandCapture -ExePath $cli -CommandArgs $firstArgs
 $exportOutput = @($firstRun.Output)
 $firstExit = [int]$firstRun.ExitCode
 $exportOutput | Out-Host
@@ -179,10 +211,11 @@ if ($firstExit -ne 0) {
         Install-OptimumOpenVinoExport -PythonExe $python
         $cli = Get-OptimumCliExe -PythonExe $python
         if (-not $cli) {
-            throw "[IR] optimum-cli.exe missing after reinstall."
+            $cli = $python
+            $cliPrefixArgs = @("-m", "optimum.commands.optimum_cli")
         }
         Write-Host "[IR] Retrying optimum export after optimum-intel install..." -ForegroundColor Yellow
-        $retryAfterInstall = Invoke-NativeCommandCapture -ExePath $cli -CommandArgs $exportArgs
+        $retryAfterInstall = Invoke-NativeCommandCapture -ExePath $cli -CommandArgs @($cliPrefixArgs + $exportArgs)
         $exportOutput = @($retryAfterInstall.Output)
         $firstExit = [int]$retryAfterInstall.ExitCode
         $exportOutput | Out-Host
@@ -192,7 +225,7 @@ if ($firstExit -ne 0) {
     if ($needsTransformersUpdate) {
         Install-OrUpgradeTransformers -PythonExe $python
         Write-Host "[IR] Retrying optimum export after transformers update..." -ForegroundColor Yellow
-        $retryRun = Invoke-NativeCommandCapture -ExePath $cli -CommandArgs $exportArgs
+        $retryRun = Invoke-NativeCommandCapture -ExePath $cli -CommandArgs @($cliPrefixArgs + $exportArgs)
         $retryOutput = @($retryRun.Output)
         $retryExit = [int]$retryRun.ExitCode
         $retryOutput | Out-Host

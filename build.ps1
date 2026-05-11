@@ -70,6 +70,28 @@ if (-not (Test-Path "build")) {
     New-Item -ItemType Directory -Path "build" | Out-Null
 }
 
+# --- Heal stale CMake cache from other projects ---
+$cachePath = Join-Path $scriptDir "build\CMakeCache.txt"
+if (Test-Path -LiteralPath $cachePath) {
+    $cacheText = Get-Content -LiteralPath $cachePath -Raw -ErrorAction SilentlyContinue
+    $srcLine = $null
+    if ($cacheText -match "(?m)^CMAKE_HOME_DIRECTORY:INTERNAL=(.+)$") {
+        $srcLine = $matches[1].Trim()
+    }
+    if (-not [string]::IsNullOrWhiteSpace($srcLine)) {
+        $expectedSource = [System.IO.Path]::GetFullPath($scriptDir).TrimEnd('\')
+        $cachedSource = [System.IO.Path]::GetFullPath($srcLine).TrimEnd('\')
+        if ($cachedSource.ToLowerInvariant() -ne $expectedSource.ToLowerInvariant()) {
+            Write-Host "⚠️  Detected stale CMake cache from another source tree:" -ForegroundColor Yellow
+            Write-Host "    cached:  $cachedSource" -ForegroundColor Yellow
+            Write-Host "    current: $expectedSource" -ForegroundColor Yellow
+            Write-Host "    Recreating build/ to avoid cross-project cache errors..." -ForegroundColor Yellow
+            Remove-Item -Recurse -Force "build"
+            New-Item -ItemType Directory -Path "build" | Out-Null
+        }
+    }
+}
+
 # --- Configure and build ---
 Write-Host "🔧 Configuring..."
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64

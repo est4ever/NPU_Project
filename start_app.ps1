@@ -3,19 +3,25 @@ param(
     [string]$Device = "",
     [int]$ApiPort = 8000,
     [int]$AppPort = 5173,
-    [int]$TimeoutSeconds = 120,
+    [int]$TimeoutSeconds = 300,
     [switch]$HideServiceWindows,
     [string[]]$BackendArgs = @(),
     [switch]$AutoExportIr,
     [switch]$NoAutoExportIr,
     [switch]$AutoSelectBestModel,
-    [switch]$PerformanceMode
+    [switch]$PerformanceMode,
+    [switch]$SkipAppShell,
+    [switch]$OpenBrowser
 )
 
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptDir
-$autoExportIr = $true
+# acoulm.ps1 sets this so terminal-only launch cannot miss -SkipAppShell (profile/launcher edge cases).
+if ($env:ACOULM_TERMINAL_ONLY -eq "1") {
+    $SkipAppShell = $true
+}
+$autoExportIr = $false
 if ($env:ACOULM_AUTO_EXPORT_IR -eq "0") { $autoExportIr = $false }
 if ($env:ACOULM_AUTO_EXPORT_IR -eq "1") { $autoExportIr = $true }
 if ($NoAutoExportIr) { $autoExportIr = $false }
@@ -49,7 +55,7 @@ function Normalize-ModelPathString {
 }
 
 function Get-RegistrySelectedModel {
-    param([string]$FallbackPath = "./models/Qwen2.5-0.5B-Instruct")
+    param([string]$FallbackPath = "./models")
 
     $result = [ordered]@{
         Path         = $FallbackPath
@@ -296,7 +302,7 @@ function Get-OpenVinoRunnableCandidates {
         }
     } catch {}
 
-    & $add "./models/Qwen2.5-0.5B-Instruct"
+    & $add "./models"
     return ,$list.ToArray()
 }
 
@@ -545,22 +551,36 @@ function Test-TcpPort {
 function Open-Url {
     param([string]$Url)
 
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        return $false
+    }
+    # Prefer shell registration (most reliable on Windows for http/https).
+    try {
+        Start-Process -FilePath $Url -ErrorAction Stop | Out-Null
+        return $true
+    } catch {}
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $Url
+        $psi.UseShellExecute = $true
+        [System.Diagnostics.Process]::Start($psi) | Out-Null
+        return $true
+    } catch {}
+    try {
+        Invoke-Item -LiteralPath $Url -ErrorAction Stop
+        return $true
+    } catch {}
     try {
         $startInfo = New-Object System.Diagnostics.ProcessStartInfo
         $startInfo.FileName = "cmd.exe"
-        $startInfo.Arguments = "/c start `"Browser`" `"$Url`""
+        $safe = $Url.Replace('"', '""')
+        $startInfo.Arguments = '/c start "" "' + $safe + '"'
         $startInfo.CreateNoWindow = $true
         $startInfo.UseShellExecute = $false
         [System.Diagnostics.Process]::Start($startInfo) | Out-Null
         return $true
-    } catch {
-        try {
-            Start-Process $Url -ErrorAction Stop
-            return $true
-        } catch {
-            return $false
-        }
-    }
+    } catch {}
+    return $false
 }
 
 function Stop-AppShellServer {
@@ -574,6 +594,32 @@ function Stop-AppShellServer {
         ForEach-Object {
             Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
         }
+}
+
+function Start-AppShellHttpProcess {
+    $pythonExe = Join-Path $scriptDir "venv\Scripts\python.exe"
+    $pythonCmd = if (Test-Path $pythonExe) { "& '$pythonExe'" } else { "python" }
+    $appShellCmd = "Set-Location '$scriptDir'; $pythonCmd -m http.server $AppPort --directory app_shell"
+    $windowStyle = if ($HideServiceWindows) { "Hidden" } else { "Normal" }
+    $appShellArgs = if ($HideServiceWindows) {
+        @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $appShellCmd)
+    } else {
+        @("-NoExit", "-Command", $appShellCmd)
+    }
+    Start-Process powershell -ArgumentList $appShellArgs -WindowStyle $windowStyle | Out-Null
+}
+
+function Wait-AppShellTcpReady {
+    param([int]$TimeoutSec = 30)
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-TcpPort -Hostname "127.0.0.1" -Port $AppPort -TimeoutMs 500) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
 }
 
 function Stop-BackendServer {
@@ -645,6 +691,7 @@ function Wait-ForApiReady {
     )
 
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $lastProgress = Get-Date
     while ((Get-Date) -lt $deadline) {
         # TCP-listening is not enough; the backend can bind the port while still loading weights.
         # Require an actual HTTP response from /v1/health.
@@ -656,68 +703,97 @@ function Wait-ForApiReady {
                 # keep waiting
             }
         }
+        $elapsed = ((Get-Date) - $lastProgress).TotalSeconds
+        if ($elapsed -ge 15) {
+            $remain = [math]::Max(0, [int]($deadline - (Get-Date)).TotalSeconds)
+            Write-Host "[App] Still waiting for backend (model load / compile) - ~${remain}s left before timeout..." -ForegroundColor DarkYellow
+            $lastProgress = Get-Date
+        }
         Start-Sleep -Milliseconds 500
     }
     return $false
 }
 
 Write-Host "[App] Project root: $scriptDir" -ForegroundColor Cyan
-Write-Host "[App] Starting backend API + App Shell (OpenWebUI disabled)..." -ForegroundColor Cyan
+Write-Host "[App] Starting AcouLM (control panel + API; OpenWebUI disabled)..." -ForegroundColor Cyan
 Write-Host "[App] Selected backend type: $($registryBackend.Type)" -ForegroundColor DarkGray
 if ($perfModeEnabled) {
     Write-Host "[App] Performance mode enabled (PERFORMANCE policy + context-routing + split-prefill defaults)." -ForegroundColor Green
 }
 
+$appUrl = "http://localhost:$AppPort"
+$apiBase = "http://localhost:$ApiPort/v1"
+$appReady = $false
+$didOpenBrowser = $false
+
 Write-Host "[App] Stopping stale backend/app shell processes..." -ForegroundColor Yellow
 Stop-BackendServer
 Stop-AppShellServer -Port $AppPort
+
+# Start static UI first so the browser can open while the model loads (API may show offline briefly).
+if (-not $SkipAppShell) {
+    Write-Host "[App] Starting control panel on port $AppPort (before API - you can open the browser now)..." -ForegroundColor Cyan
+    Write-Host "[App] The page may show API offline until the backend finishes loading weights." -ForegroundColor DarkGray
+    Start-AppShellHttpProcess
+    $appReady = Wait-AppShellTcpReady -TimeoutSec 30
+    if ($appReady) {
+        Write-Host "[App] Control panel is listening at $appUrl" -ForegroundColor Green
+    } else {
+        Write-Host "[App] Control panel did not become ready in time; will retry after the API is up." -ForegroundColor Yellow
+    }
+    if ($OpenBrowser) {
+        if (Open-Url -Url $appUrl) {
+            $didOpenBrowser = $true
+            Write-Host "[App] Opened browser (control panel)." -ForegroundColor Green
+        } else {
+            Write-Host "[App] Could not auto-open browser. Open manually: $appUrl" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "[App] Control panel URL: $appUrl" -ForegroundColor DarkGray
+    }
+}
+
+Write-Host "[App] Launching backend. First load can take 1-5 min (GGUF/IR compile)." -ForegroundColor DarkCyan
+if ($HideServiceWindows) {
+    Write-Host "[App] Service windows are hidden — use Task Manager for npu_wrapper.exe if you need a process view." -ForegroundColor DarkYellow
+} else {
+    Write-Host "[App] A visible PowerShell window will show backend (run.ps1) output." -ForegroundColor DarkGray
+}
 
 Start-BackendServer -Model $ModelPath -DeviceOverride $Device -Port $ApiPort -HideWindow:$HideServiceWindows -Args $BackendArgs
 
 if (Wait-ForApiReady -Port $ApiPort -TimeoutSec $TimeoutSeconds) {
     Write-Host "[App] Backend API is ready at http://localhost:$ApiPort/v1" -ForegroundColor Green
 } else {
-    throw "[App] Backend API did not become ready on port $ApiPort within $TimeoutSeconds seconds."
+    throw "[App] Backend API did not become ready on port $ApiPort within $TimeoutSeconds seconds.`n  Try: .\start_app.ps1 -TimeoutSeconds 600 -ModelPath '$ModelPath'`n  Or open a visible backend window: .\start_app.ps1 -ModelPath '$ModelPath' (omit -HideServiceWindows from wrappers that pass it)."
 }
 
-Write-Host "[App] Preparing app shell on port $AppPort..." -ForegroundColor Cyan
-
-$pythonExe = Join-Path $scriptDir "venv\Scripts\python.exe"
-$pythonCmd = if (Test-Path $pythonExe) { "& '$pythonExe'" } else { "python" }
-$appShellCmd = "Set-Location '$scriptDir'; $pythonCmd -m http.server $AppPort --directory app_shell"
-$windowStyle = if ($HideServiceWindows) { "Hidden" } else { "Normal" }
-$appShellArgs = if ($HideServiceWindows) {
-    @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $appShellCmd)
+if ($SkipAppShell) {
+    Write-Host "[App] Skipping browser app shell (terminal-only). API: $apiBase" -ForegroundColor DarkCyan
+    Write-Host "[App] Optional browser UI later: .\start_app.ps1 -OpenBrowser (starts app shell + opens tab)." -ForegroundColor DarkGray
 } else {
-    @("-NoExit", "-Command", $appShellCmd)
-}
-Start-Process powershell -ArgumentList $appShellArgs -WindowStyle $windowStyle | Out-Null
-
-$deadline = (Get-Date).AddSeconds(30)
-$appReady = $false
-while ((Get-Date) -lt $deadline) {
-    if (Test-TcpPort -Hostname "127.0.0.1" -Port $AppPort -TimeoutMs 500) {
-        $appReady = $true
-        break
+    if (-not $appReady) {
+        Write-Host "[App] Retrying control panel after API start..." -ForegroundColor Yellow
+        Start-AppShellHttpProcess
+        $appReady = Wait-AppShellTcpReady -TimeoutSec 30
+        if ($appReady) {
+            Write-Host "[App] Control panel is up: $appUrl" -ForegroundColor Green
+        } else {
+            Write-Host "[App] Control panel still not responding — check Python and port $AppPort." -ForegroundColor Yellow
+        }
+        if ($OpenBrowser -and -not $didOpenBrowser) {
+            if (Open-Url -Url $appUrl) {
+                $didOpenBrowser = $true
+                Write-Host "[App] Opened browser (control panel)." -ForegroundColor Green
+            } else {
+                Write-Host "[App] Could not auto-open browser. Open manually: $appUrl" -ForegroundColor Yellow
+            }
+        }
     }
-    Start-Sleep -Milliseconds 500
-}
-
-$appUrl = "http://localhost:$AppPort"
-$apiBase = "http://localhost:$ApiPort/v1"
-
-if ($appReady) {
-    Write-Host "[App] App shell is ready at $appUrl" -ForegroundColor Green
-} else {
-    Write-Host "[App] App shell did not report ready within timeout, but process was started." -ForegroundColor Yellow
-}
-
-if (Open-Url -Url $appUrl) {
-    Write-Host "[App] Opened app shell in browser." -ForegroundColor Green
-} else {
-    Write-Host "[App] Could not auto-open browser. Open manually: $appUrl" -ForegroundColor Yellow
 }
 
 Write-Host "`n[App] Ready." -ForegroundColor Green
-Write-Host "Primary UI (App Shell): $appUrl"
+if (-not $SkipAppShell) {
+    Write-Host "Primary UI (App Shell): $appUrl"
+}
 Write-Host "API base: $apiBase"
