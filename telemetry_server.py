@@ -4,7 +4,8 @@ AcouLM privacy-first telemetry receiver.
 
 - POST /telemetry        ingest one event
 - GET  /telemetry/health quick health check
-- GET  /telemetry/summary?days=30  aggregate DAU/MAU-like counters
+- GET  /telemetry/summary?days=30  rolling window (1–3650 days)
+- GET  /telemetry/summary?all=1   all rows in DB (all-time)
 
 Design goals:
 - no external dependencies
@@ -118,13 +119,19 @@ class TelemetryHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/telemetry/summary":
             query = parse_qs(parsed.query)
+            all_flag = (query.get("all") or ["0"])[0].lower() in ("1", "true", "yes")
             days_raw = (query.get("days") or ["30"])[0]
             try:
-                days = max(1, min(3650, int(days_raw)))
+                days_int = int(days_raw)
             except Exception:
-                days = 30
-            since_day = (datetime.now(timezone.utc) - timedelta(days=days - 1)).strftime("%Y-%m-%d")
-            self._json(200, summarize(self.db_path, since_day, days))
+                days_int = 30
+            # days=0 or all=1 → entire DB (all-time)
+            if all_flag or days_int <= 0:
+                self._json(200, summarize(self.db_path, since_day=None, window_days=None))
+            else:
+                days = max(1, min(3650, days_int))
+                since_day = (datetime.now(timezone.utc) - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+                self._json(200, summarize(self.db_path, since_day=since_day, window_days=days))
             return
         self._json(404, {"ok": False, "error": "not_found"})
 
@@ -206,47 +213,63 @@ class TelemetryHandler(BaseHTTPRequestHandler):
         return
 
 
-def summarize(db_path: Path, since_day: str, days: int) -> dict:
+def summarize(db_path: Path, since_day: str | None, window_days: int | None) -> dict:
     con = sqlite3.connect(db_path)
     try:
+        if since_day is None:
+            day_clause = "1=1"
+            day_params: tuple = ()
+            first_day_row = con.execute("SELECT MIN(event_day) FROM events").fetchone()
+            first_day_utc = first_day_row[0] if first_day_row and first_day_row[0] else None
+            last_day_row = con.execute("SELECT MAX(event_day) FROM events").fetchone()
+            last_day_utc = last_day_row[0] if last_day_row and last_day_row[0] else None
+        else:
+            day_clause = "event_day >= ?"
+            day_params = (since_day,)
+            first_day_utc = since_day
+            last_day_utc = None
+
         total_events = con.execute(
-            "SELECT COUNT(*) FROM events WHERE event_day >= ?", (since_day,)
+            f"SELECT COUNT(*) FROM events WHERE {day_clause}", day_params
         ).fetchone()[0]
         unique_installs = con.execute(
-            "SELECT COUNT(DISTINCT install_hash) FROM events WHERE event_day >= ? AND install_hash <> ''",
-            (since_day,),
+            f"SELECT COUNT(DISTINCT install_hash) FROM events WHERE {day_clause} AND install_hash <> ''",
+            day_params,
         ).fetchone()[0]
         unique_sessions = con.execute(
-            "SELECT COUNT(DISTINCT session_hash) FROM events WHERE event_day >= ? AND session_hash <> ''",
-            (since_day,),
+            f"SELECT COUNT(DISTINCT session_hash) FROM events WHERE {day_clause} AND session_hash <> ''",
+            day_params,
         ).fetchone()[0]
         event_types = con.execute(
-            """
+            f"""
             SELECT event_type, COUNT(*) AS n
             FROM events
-            WHERE event_day >= ?
+            WHERE {day_clause}
             GROUP BY event_type
             ORDER BY n DESC
             """,
-            (since_day,),
+            day_params,
         ).fetchall()
         dau_rows = con.execute(
-            """
+            f"""
             SELECT event_day, COUNT(DISTINCT install_hash) AS dau
             FROM events
-            WHERE event_day >= ? AND install_hash <> ''
+            WHERE {day_clause} AND install_hash <> ''
             GROUP BY event_day
             ORDER BY event_day ASC
             """,
-            (since_day,),
+            day_params,
         ).fetchall()
     finally:
         con.close()
 
     return {
         "ok": True,
-        "window_days": days,
+        "window_mode": "all_time" if since_day is None else "rolling",
+        "window_days": window_days,
         "since_day_utc": since_day,
+        "first_day_utc": first_day_utc,
+        "last_day_utc": last_day_utc if since_day is None else None,
         "totals": {
             "events": total_events,
             "unique_installs": unique_installs,
@@ -304,6 +327,7 @@ def dashboard_html() -> str:
           <option value="30" selected>30d</option>
           <option value="90">90d</option>
           <option value="365">365d</option>
+          <option value="0">All time</option>
         </select>
         <button id="refresh">Refresh</button>
       </div>
@@ -406,9 +430,10 @@ def dashboard_html() -> str:
     }
 
     async function loadSummary() {
-      const days = Number($("days").value || 30);
+      const days = Number($("days").value);
       const started = Date.now();
-      const res = await fetch(`/telemetry/summary?days=${days}`);
+      const url = days === 0 ? "/telemetry/summary?all=1" : `/telemetry/summary?days=${days || 30}`;
+      const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
 
@@ -428,7 +453,8 @@ def dashboard_html() -> str:
 
       const rowsHtml = eventRows.map(r => `<tr><td>${r.event_type}</td><td>${fmt(r.count)}</td></tr>`).join("");
       $("eventRows").innerHTML = rowsHtml || "<tr><td colspan='2'>No events yet</td></tr>";
-      $("status").textContent = `Updated ${new Date().toLocaleTimeString()} · ${Date.now()-started}ms`;
+      const mode = data?.window_mode === "all_time" ? "all-time" : `${data?.window_days || "?"}d`;
+      $("status").textContent = `Window: ${mode} · updated ${new Date().toLocaleTimeString()} · ${Date.now()-started}ms`;
     }
 
     async function refresh() {
@@ -474,6 +500,7 @@ def main() -> None:
     print("  POST /telemetry")
     print("  GET  /telemetry/health")
     print("  GET  /telemetry/summary?days=30")
+    print("  GET  /telemetry/summary?all=1")
     server.serve_forever()
 
 

@@ -197,7 +197,8 @@ What it does **not** send:
 
 Default endpoint:
 - Receiver: `http://127.0.0.1:8800/telemetry`
-- Summary: `http://127.0.0.1:8800/telemetry/summary?days=30`
+- Summary (rolling): `http://127.0.0.1:8800/telemetry/summary?days=30`
+- Summary (all-time): `http://127.0.0.1:8800/telemetry/summary?all=1`
 - Health: `http://127.0.0.1:8800/telemetry/health`
 
 Then in app shell (`http://localhost:5173`):
