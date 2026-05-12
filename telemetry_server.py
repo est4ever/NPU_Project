@@ -93,6 +93,14 @@ class TelemetryHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _html(self, status: int, body: str) -> None:
+        raw = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
     def do_OPTIONS(self) -> None:  # noqa: N802
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -102,6 +110,9 @@ class TelemetryHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path in ("/", "/telemetry/dashboard"):
+            self._html(200, dashboard_html())
+            return
         if parsed.path == "/telemetry/health":
             self._json(200, {"ok": True, "service": "acoulm-telemetry", "time_utc": utc_now_iso()})
             return
@@ -244,6 +255,196 @@ def summarize(db_path: Path, since_day: str, days: int) -> dict:
         "events_by_type": [{"event_type": et, "count": n} for et, n in event_types],
         "daily_active_installs": [{"day": day, "dau": dau} for day, dau in dau_rows],
     }
+
+
+def dashboard_html() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AcouLM Telemetry Dashboard</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; font-family: Inter, Segoe UI, Arial, sans-serif; background: #0b1020; color: #e8ecff; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 20px; }
+    .header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: center; }
+    .title { font-size: 24px; font-weight: 700; margin: 0; }
+    .muted { color: #9fb0e0; font-size: 13px; }
+    .controls { display: flex; gap: 8px; align-items: center; }
+    select, button { background: #151d36; border: 1px solid #2b3865; color: #e8ecff; padding: 8px 10px; border-radius: 10px; }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 12px; margin-top: 16px; }
+    .card { background: #121933; border: 1px solid #243057; border-radius: 14px; padding: 12px; }
+    .k { color: #95a9df; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+    .v { font-size: 28px; font-weight: 700; margin-top: 6px; }
+    .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-top: 12px; }
+    .panel { background: #121933; border: 1px solid #243057; border-radius: 14px; padding: 12px; }
+    canvas { width: 100%; height: 280px; background: #0d1430; border-radius: 10px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border-bottom: 1px solid #243057; padding: 8px 6px; text-align: left; }
+    th { color: #9fb0e0; font-weight: 600; }
+    .status { margin-top: 10px; color: #a8b7e6; font-size: 12px; }
+    @media (max-width: 900px) {
+      .cards { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div>
+        <h1 class="title">AcouLM Telemetry Dashboard</h1>
+        <div class="muted">Anonymous usage analytics (DAU/MAU, sessions, events)</div>
+      </div>
+      <div class="controls">
+        <label class="muted" for="days">Window</label>
+        <select id="days">
+          <option value="7">7d</option>
+          <option value="30" selected>30d</option>
+          <option value="90">90d</option>
+          <option value="365">365d</option>
+        </select>
+        <button id="refresh">Refresh</button>
+      </div>
+    </div>
+
+    <div class="cards">
+      <div class="card"><div class="k">Unique Installs (MAU-like)</div><div class="v" id="mau">-</div></div>
+      <div class="card"><div class="k">Unique Sessions</div><div class="v" id="sessions">-</div></div>
+      <div class="card"><div class="k">Total Events</div><div class="v" id="events">-</div></div>
+      <div class="card"><div class="k">Latest DAU</div><div class="v" id="latestDau">-</div></div>
+    </div>
+
+    <div class="grid">
+      <div class="panel">
+        <div class="k">Daily Active Installs</div>
+        <canvas id="dauChart" width="800" height="280"></canvas>
+      </div>
+      <div class="panel">
+        <div class="k">Event Type Mix</div>
+        <canvas id="eventChart" width="360" height="280"></canvas>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:12px">
+      <div class="k">Events by Type</div>
+      <table>
+        <thead><tr><th>Event</th><th>Count</th></tr></thead>
+        <tbody id="eventRows"></tbody>
+      </table>
+      <div class="status" id="status">Loading...</div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    function fmt(n){ return Number(n || 0).toLocaleString(); }
+
+    function drawLine(canvas, labels, values) {
+      const ctx = canvas.getContext("2d");
+      const w = canvas.width, h = canvas.height;
+      ctx.clearRect(0,0,w,h);
+      ctx.fillStyle = "#0d1430"; ctx.fillRect(0,0,w,h);
+      const pad = {l:44, r:12, t:12, b:26};
+      const innerW = w - pad.l - pad.r;
+      const innerH = h - pad.t - pad.b;
+      const maxV = Math.max(1, ...values);
+      ctx.strokeStyle = "#2a3a6a";
+      ctx.lineWidth = 1;
+      for (let i=0;i<=4;i++){
+        const y = pad.t + (innerH * i/4);
+        ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(w-pad.r, y); ctx.stroke();
+      }
+      if (!values.length) return;
+      ctx.strokeStyle = "#60a5fa";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      values.forEach((v, i) => {
+        const x = pad.l + (innerW * (values.length===1 ? 0 : i/(values.length-1)));
+        const y = pad.t + innerH - (v/maxV)*innerH;
+        if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+      });
+      ctx.stroke();
+      ctx.fillStyle = "#93c5fd";
+      values.forEach((v, i) => {
+        const x = pad.l + (innerW * (values.length===1 ? 0 : i/(values.length-1)));
+        const y = pad.t + innerH - (v/maxV)*innerH;
+        ctx.beginPath(); ctx.arc(x,y,2.5,0,Math.PI*2); ctx.fill();
+      });
+      ctx.fillStyle = "#9fb0e0";
+      ctx.font = "11px sans-serif";
+      const step = Math.max(1, Math.floor(labels.length/6));
+      labels.forEach((d, i) => {
+        if (i % step !== 0 && i !== labels.length - 1) return;
+        const x = pad.l + (innerW * (labels.length===1 ? 0 : i/(labels.length-1)));
+        ctx.fillText(d.slice(5), x-14, h-8);
+      });
+    }
+
+    function drawBars(canvas, rows) {
+      const ctx = canvas.getContext("2d");
+      const w = canvas.width, h = canvas.height;
+      ctx.clearRect(0,0,w,h);
+      ctx.fillStyle = "#0d1430"; ctx.fillRect(0,0,w,h);
+      const pad = {l:8, r:8, t:12, b:22};
+      const innerW = w - pad.l - pad.r;
+      const innerH = h - pad.t - pad.b;
+      const top = rows.slice(0,6);
+      const maxV = Math.max(1, ...top.map(r => r.count || 0));
+      const barW = innerW / Math.max(1, top.length) * 0.75;
+      top.forEach((r, i) => {
+        const x = pad.l + i * (innerW / Math.max(1, top.length)) + 8;
+        const bh = ((r.count || 0) / maxV) * (innerH - 16);
+        const y = pad.t + innerH - bh;
+        ctx.fillStyle = "#7c3aed";
+        ctx.fillRect(x, y, barW, bh);
+        ctx.fillStyle = "#c4b5fd";
+        ctx.font = "11px sans-serif";
+        ctx.fillText(String(r.event_type || "-").slice(0,8), x, h-8);
+      });
+    }
+
+    async function loadSummary() {
+      const days = Number($("days").value || 30);
+      const started = Date.now();
+      const res = await fetch(`/telemetry/summary?days=${days}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      $("mau").textContent = fmt(data?.totals?.unique_installs);
+      $("sessions").textContent = fmt(data?.totals?.unique_sessions);
+      $("events").textContent = fmt(data?.totals?.events);
+      const daily = data?.daily_active_installs || [];
+      $("latestDau").textContent = fmt(daily.length ? daily[daily.length-1].dau : 0);
+
+      drawLine(
+        $("dauChart"),
+        daily.map(d => d.day),
+        daily.map(d => Number(d.dau || 0))
+      );
+      const eventRows = data?.events_by_type || [];
+      drawBars($("eventChart"), eventRows);
+
+      const rowsHtml = eventRows.map(r => `<tr><td>${r.event_type}</td><td>${fmt(r.count)}</td></tr>`).join("");
+      $("eventRows").innerHTML = rowsHtml || "<tr><td colspan='2'>No events yet</td></tr>";
+      $("status").textContent = `Updated ${new Date().toLocaleTimeString()} · ${Date.now()-started}ms`;
+    }
+
+    async function refresh() {
+      $("status").textContent = "Loading...";
+      try { await loadSummary(); }
+      catch (e) { $("status").textContent = `Failed: ${e.message || e}`; }
+    }
+
+    $("refresh").addEventListener("click", refresh);
+    $("days").addEventListener("change", refresh);
+    refresh();
+    setInterval(refresh, 60000);
+  </script>
+</body>
+</html>
+"""
 
 
 def main() -> None:
