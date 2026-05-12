@@ -44,6 +44,7 @@ runlogs/
 
 # Runtime-generated metrics
 metrics.ndjson
+telemetry/
 
 # Registry JSON is machine-specific (paths, selections). Commit only *.example.json templates.
 registry/*.json

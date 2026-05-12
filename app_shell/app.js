@@ -304,6 +304,10 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   }
 
   const PREFS_KEY = "acoulm" + ".ui.prefs.v1";
+  const TELEMETRY_INSTALL_ID_KEY = "acoulm.telemetry.install_id.v1";
+  const TELEMETRY_HEARTBEAT_MS = 15 * 60 * 1000;
+  let telemetryHeartbeatTimer = null;
+  const telemetrySessionId = crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   function loadPrefs() {
     try {
       return JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
@@ -314,6 +318,218 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   function savePrefs(partial) {
     const next = { ...loadPrefs(), ...partial };
     localStorage.setItem(PREFS_KEY, JSON.stringify(next));
+  }
+
+  function getInstallId() {
+    try {
+      let id = localStorage.getItem(TELEMETRY_INSTALL_ID_KEY);
+      if (!id) {
+        id = crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        localStorage.setItem(TELEMETRY_INSTALL_ID_KEY, id);
+      }
+      return id;
+    } catch {
+      return "local-ephemeral";
+    }
+  }
+
+  function getTelemetryPrefs() {
+    const prefs = loadPrefs();
+    return {
+      enabled: prefs.telemetryEnabled === true,
+      endpoint: String(prefs.telemetryEndpoint || "").trim(),
+    };
+  }
+
+  function syncTelemetryControlsFromPrefs() {
+    const p = getTelemetryPrefs();
+    if (el("telemetryEnabled")) el("telemetryEnabled").checked = p.enabled;
+    if (el("telemetryEndpoint")) el("telemetryEndpoint").value = p.endpoint;
+  }
+
+  async function sendTelemetryEvent(eventType, extra = {}) {
+    const p = getTelemetryPrefs();
+    if (!p.enabled || !p.endpoint) return false;
+    const endpoint = String(p.endpoint).trim();
+    if (!/^https?:\/\//i.test(endpoint)) return false;
+
+    const payload = {
+      event_type: String(eventType || "unknown"),
+      event_time: new Date().toISOString(),
+      app: "AcouLM",
+      app_surface: "app_shell",
+      install_id: getInstallId(),
+      session_id: telemetrySessionId,
+      active_device: statusCache?.active_device || null,
+      policy: statusCache?.policy || null,
+      model: statusCache?.selected_model || null,
+      ...extra,
+    };
+
+    try {
+      await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        keepalive: true,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function startTelemetryHeartbeat() {
+    if (telemetryHeartbeatTimer) {
+      clearInterval(telemetryHeartbeatTimer);
+      telemetryHeartbeatTimer = null;
+    }
+    const p = getTelemetryPrefs();
+    if (!p.enabled || !p.endpoint) return;
+    telemetryHeartbeatTimer = setInterval(() => {
+      void sendTelemetryEvent("session_heartbeat");
+    }, TELEMETRY_HEARTBEAT_MS);
+  }
+
+  function saveTelemetrySettings() {
+    const enabled = !!el("telemetryEnabled")?.checked;
+    const endpoint = String(el("telemetryEndpoint")?.value || "").trim();
+    savePrefs({ telemetryEnabled: enabled, telemetryEndpoint: endpoint });
+    syncTelemetryControlsFromPrefs();
+    startTelemetryHeartbeat();
+    addActivity(
+      enabled
+        ? (endpoint ? "Anonymous telemetry enabled" : "Telemetry enabled but endpoint missing")
+        : "Telemetry disabled",
+      "ready"
+    );
+    if (enabled && endpoint) {
+      void sendTelemetryEvent("telemetry_enabled");
+    }
+  }
+
+  const DEFAULT_TUNING = {
+    maxTokens: 256,
+    contextCapTokens: 2048,
+  };
+
+  const PRESET_DEFAULT = "balanced";
+  const PERFORMANCE_PRESETS = {
+    "latency-first": {
+      label: "Latency First",
+      policy: "PERFORMANCE",
+      features: { "split-prefill": false, "context-routing": false, "optimize-memory": false },
+      threshold: null,
+    },
+    balanced: {
+      label: "Balanced",
+      policy: "BALANCED",
+      features: { "split-prefill": true, "context-routing": true, "optimize-memory": true },
+      threshold: 80,
+    },
+    "throughput-first": {
+      label: "Throughput First",
+      policy: "PERFORMANCE",
+      features: { "split-prefill": true, "context-routing": true, "optimize-memory": false },
+      threshold: 128,
+    },
+    "memory-safe": {
+      label: "Memory Safe",
+      policy: "BATTERY_SAVER",
+      features: { "split-prefill": false, "context-routing": false, "optimize-memory": true },
+      threshold: null,
+    },
+  };
+
+  function clampInteger(value, min, max, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || !Number.isInteger(n)) return fallback;
+    return Math.min(max, Math.max(min, n));
+  }
+
+  function getRuntimeTuning() {
+    const prefs = loadPrefs();
+    return {
+      maxTokens: clampInteger(prefs.defaultMaxTokens, 16, 2048, DEFAULT_TUNING.maxTokens),
+      contextCapTokens: clampInteger(prefs.contextCapTokens, 256, 32768, DEFAULT_TUNING.contextCapTokens),
+      performancePreset:
+        typeof prefs.performancePreset === "string" && PERFORMANCE_PRESETS[prefs.performancePreset]
+          ? prefs.performancePreset
+          : PRESET_DEFAULT,
+    };
+  }
+
+  function syncRuntimeTuningControlsFromPrefs() {
+    const tuning = getRuntimeTuning();
+    if (el("defaultMaxTokens")) el("defaultMaxTokens").value = String(tuning.maxTokens);
+    if (el("contextCapTokens")) el("contextCapTokens").value = String(tuning.contextCapTokens);
+    if (el("performancePreset")) el("performancePreset").value = tuning.performancePreset;
+  }
+
+  function saveRuntimeTuningSettings() {
+    const maxTokens = clampInteger(el("defaultMaxTokens")?.value, 16, 2048, DEFAULT_TUNING.maxTokens);
+    const contextCapTokens = clampInteger(el("contextCapTokens")?.value, 256, 32768, DEFAULT_TUNING.contextCapTokens);
+    const presetRaw = String(el("performancePreset")?.value || PRESET_DEFAULT).trim();
+    const performancePreset = PERFORMANCE_PRESETS[presetRaw] ? presetRaw : PRESET_DEFAULT;
+    savePrefs({ defaultMaxTokens: maxTokens, contextCapTokens, performancePreset });
+    syncRuntimeTuningControlsFromPrefs();
+    addActivity(`Saved tuning: max_tokens=${maxTokens}, context_cap=${contextCapTokens}, preset=${performancePreset}`, "ready");
+  }
+
+  async function applyPerformancePreset() {
+    const presetId = String(el("performancePreset")?.value || PRESET_DEFAULT).trim();
+    const preset = PERFORMANCE_PRESETS[presetId];
+    if (!preset) {
+      throw new Error(`Unknown preset: ${presetId}`);
+    }
+
+    setButtonBusy("applyPerformancePreset", true, "Applying...");
+    const output = el("featuresOutput");
+    if (output) {
+      output.textContent = `Applying preset: ${preset.label}\n`;
+    }
+    try {
+      const policyResult = await requestJson("/cli/policy", {
+        method: "POST",
+        body: JSON.stringify({ policy: preset.policy }),
+      });
+      if (output) appendText(output, `policy -> ${policyResult.new_policy || preset.policy}\n`);
+
+      for (const [feature, enabled] of Object.entries(preset.features)) {
+        const featureResult = await setFeatureToggle(feature, enabled);
+        if (output) appendText(output, `${feature} -> ${featureResult.status}\n`);
+      }
+
+      if (Number.isInteger(preset.threshold) && preset.threshold > 0) {
+        const thresholdResult = await requestJson("/cli/threshold", {
+          method: "POST",
+          body: JSON.stringify({ threshold: preset.threshold }),
+        });
+        if (output) appendText(output, `threshold -> ${thresholdResult.new_threshold || preset.threshold}\n`);
+      }
+
+      savePrefs({ performancePreset: presetId });
+      addActivity(`Preset applied: ${preset.label}`, "ready");
+      await refreshStatus();
+      updateThresholdControlState();
+      validateThresholdInput();
+    } catch (err) {
+      if (output) appendText(output, `preset failed: ${String(err.message || err)}\n`);
+      addActivity(`Preset apply failed: ${String(err.message || err)}`, "error");
+      throw err;
+    } finally {
+      setButtonBusy("applyPerformancePreset", false);
+    }
+  }
+
+  function resetPerformancePresetDefaults() {
+    savePrefs({
+      defaultMaxTokens: DEFAULT_TUNING.maxTokens,
+      contextCapTokens: DEFAULT_TUNING.contextCapTokens,
+      performancePreset: PRESET_DEFAULT,
+    });
+    syncRuntimeTuningControlsFromPrefs();
+    addActivity("Preset controls reset to defaults", "ready");
   }
 
   function applyTheme(mode) {
@@ -993,6 +1209,14 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     const totalMs    = payload?.total_ms;
     const tokens     = numericOrNull(payload?.completion_tokens);
     const device     = String(payload?.device || "-").toUpperCase();
+    const estWatts   = isSummary
+      ? (payload?.avg_power_estimated_w ?? payload?.power_estimated_w)
+      : payload?.power_estimated_w;
+    const estMjTok   = isSummary
+      ? (payload?.avg_energy_per_token_estimated_mJ ?? payload?.energy_per_token_estimated_mJ)
+      : payload?.energy_per_token_estimated_mJ;
+    const realWatts  = (v) => { const n = numericOrNull(v); return n !== null && n > 0 ? `~${n.toFixed(1)} W` : "–"; };
+    const realMjTok  = (v) => { const n = numericOrNull(v); return n !== null && n > 0 ? `~${n.toFixed(1)} mJ/tok` : "–"; };
 
     const cards = [
       {
@@ -1020,6 +1244,14 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         value: isSummary
           ? String(payload?.record_count ?? "-")
           : (tokens !== null ? String(tokens) : (payload?.token_count_source || payload?.mode || "-")),
+      },
+      {
+        title: isSummary ? "Avg Est. Power" : "Est. Power",
+        value: realWatts(estWatts),
+      },
+      {
+        title: isSummary ? "Avg Est. Energy/Token" : "Est. Energy/Token",
+        value: realMjTok(estMjTok),
       },
     ];
 
@@ -1878,6 +2110,11 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     input.value = "";
     output.scrollTop = output.scrollHeight;
     try {
+      const tuning = getRuntimeTuning();
+      void sendTelemetryEvent("chat_request", {
+        max_tokens: tuning.maxTokens,
+        input_tokens_estimated: estimateTokens(text),
+      });
       const modelId = await getChatModelId();
       const resp = await requestJson("/chat/completions", {
         method: "POST",
@@ -1887,7 +2124,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
           messages: [{ role: "user", content: text }],
           stream: false,
           temperature: 0.7,
-          max_tokens: 512,
+          max_tokens: tuning.maxTokens,
         }),
       });
       const content =
@@ -1895,9 +2132,14 @@ if (window.__NPU_APP_SHELL_LOADED__) {
           ? String(resp.choices[0].message.content || "")
           : "(no content)";
       output.textContent += `[${nowStamp()}] Assistant:\n${content}\n`;
+      const outputTokens = estimateTokens(content);
+      void sendTelemetryEvent("chat_response", {
+        output_tokens_estimated: outputTokens,
+      });
       addActivity("Chat reply received", "ready");
     } catch (err) {
       output.textContent += `[${nowStamp()}] Error: ${String(err.message || err)}\n`;
+      void sendTelemetryEvent("chat_error", { error_kind: String(err.message || err).slice(0, 120) });
       addActivity(`Chat failed: ${String(err.message || err)}`, "error");
     } finally {
       isChatBusy = false;
@@ -1941,6 +2183,11 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     isChatBusy = true;
     setButtonBusy("btnSendChat", true, "Summarizing...");
     try {
+      const tuning = getRuntimeTuning();
+      const approxTokens = estimateTokens(history);
+      const trimmedHistory = approxTokens > tuning.contextCapTokens
+        ? history.slice(Math.max(0, history.length - Math.floor(tuning.contextCapTokens * 4)))
+        : history;
       const modelId = await getChatModelId();
       const resp = await requestJson("/chat/completions", {
         method: "POST",
@@ -1950,12 +2197,12 @@ if (window.__NPU_APP_SHELL_LOADED__) {
           messages: [
             {
               role: "user",
-              content: `Summarize the following conversation transcript in 5-8 bullet points. Be concise.\n\n---\n${history}\n---`,
+              content: `Summarize the following conversation transcript in 5-8 bullet points. Be concise.\n\n---\n${trimmedHistory}\n---`,
             },
           ],
           stream: false,
           temperature: 0.3,
-          max_tokens: 512,
+          max_tokens: tuning.maxTokens,
         }),
       });
       const content =
@@ -2487,8 +2734,8 @@ if (window.__NPU_APP_SHELL_LOADED__) {
           sum.appendChild(wrap);
         };
         row("API port", data.api_port != null ? String(data.api_port) : "—");
-        row("/v1/health", formatHttpProbe(data.api_health));
-        row("App shell :5173", formatHttpProbe(data.app_shell_5173));
+        row("Backend status", formatHttpProbe(data.api_health));
+        row("Browser control UI", formatHttpProbe(data.app_shell_5173));
         if (data.selected_model_id) {
           row("Selected model", String(data.selected_model_id));
         }
@@ -2578,7 +2825,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       setSystemFeedback(
         h && typeof h.reachable === "boolean"
           ? h.reachable
-            ? "Probe: API /v1/health reachable."
+            ? "Backend service is reachable."
             : "Probe: API not reachable."
           : "Probe finished — see Readiness JSON.",
         "ok"
@@ -2916,6 +3163,8 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       themeSelect.value = uiTheme === "dark" ? "dark" : "light";
     }
     setPrimaryView(pf.activeView === "control" ? "control" : "workspace");
+    syncRuntimeTuningControlsFromPrefs();
+    syncTelemetryControlsFromPrefs();
 
     on("switchDevice", "click", switchDevice);
     on("wSwitchDevice", "click", () => {
@@ -2929,6 +3178,12 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     });
     on("loadDevice", "click", loadDevice);
     on("setThreshold", "click", setThreshold);
+    on("saveRuntimeTuning", "click", saveRuntimeTuningSettings);
+    on("saveTelemetrySettings", "click", saveTelemetrySettings);
+    on("applyPerformancePreset", "click", () => {
+      void applyPerformancePreset();
+    });
+    on("resetPerformancePreset", "click", resetPerformancePresetDefaults);
     on("refreshStatus", "click", refreshStatus);
     on("fetchMetrics", "click", () => fetchMetrics(false));
     on("fetchMemory", "click", () => fetchMemoryEvidence(false));
@@ -3108,6 +3363,8 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     }
 
     setRuntimeStrip();
+    startTelemetryHeartbeat();
+    void sendTelemetryEvent("app_start");
     bindGlobalShortcuts();
     startConnectionPolling();
     startCliEvents();
