@@ -183,13 +183,27 @@
           <span id="restartCountdown" class="system-countdown" aria-live="polite"></span>
         </div>
         <div class="system-row system-row-grid">
-          <button id="btnStackProbe" class="ghost" type="button">Probe API /health</button>
+          <button id="btnStackProbe" class="ghost" type="button">Check backend status</button>
           <button id="btnModelValidate" class="ghost" type="button">Validate selected model</button>
           <button id="btnDeviceRecommend" class="ghost" type="button">Device recommendation</button>
           <button id="btnExportDiag" class="ghost" type="button">Export diagnostics (zip)</button>
         </div>
       </div>
       <p id="systemFeedback" class="system-feedback" role="status" aria-live="polite" hidden></p>
+      <h3 class="subpanel-title">Telemetry (privacy-first)</h3>
+      <div class="row">
+        <label title="Send only anonymous usage counters (no prompts, no model outputs).">
+          <input id="telemetryEnabled" type="checkbox" />
+          Enable anonymous telemetry
+        </label>
+        <button id="saveTelemetrySettings" class="ghost" type="button">Save</button>
+      </div>
+      <div class="row">
+        <label>Telemetry endpoint
+          <input id="telemetryEndpoint" type="text" placeholder="https://your-domain.example/telemetry" />
+        </label>
+      </div>
+      <p class="hint">Default is OFF. Telemetry sends only event type, app version, timestamp, anonymized install/session IDs, and runtime metadata (device/policy). No chat prompt or response text is sent.</p>
       <div id="readinessSummary" class="readiness-summary"></div>
       <details class="raw-toggle">
         <summary>Readiness JSON</summary>
@@ -258,6 +272,30 @@
         <button class="threshold-preset ghost" data-value="128" type="button">128</button>
         <button class="threshold-preset ghost" data-value="256" type="button">256</button>
       </div>
+      <h3 class="subpanel-title">Optimization Controls</h3>
+      <div class="row">
+        <label>Default max tokens
+          <input id="defaultMaxTokens" type="number" min="16" max="2048" step="16" value="256" />
+        </label>
+        <label>Context cap (tokens)
+          <input id="contextCapTokens" type="number" min="256" max="32768" step="256" value="2048" />
+        </label>
+        <button id="saveRuntimeTuning" class="ghost" type="button">Save tuning</button>
+      </div>
+      <p class="hint">Default max tokens applies to browser chat requests. Context cap is a guardrail setting stored in UI prefs for memory-aware workflows.</p>
+      <div class="row">
+        <label>Preset
+          <select id="performancePreset">
+            <option value="latency-first">Latency First</option>
+            <option value="balanced" selected>Balanced</option>
+            <option value="throughput-first">Throughput First</option>
+            <option value="memory-safe">Memory Safe</option>
+          </select>
+        </label>
+        <button id="applyPerformancePreset" type="button">Apply preset</button>
+        <button id="resetPerformancePreset" class="ghost" type="button">Reset defaults</button>
+      </div>
+      <p class="hint">Preset applies policy + split-prefill + context-routing + optimize-memory + threshold as one action.</p>
       <p id="thresholdHint" class="hint"></p>
       <details class="raw-toggle">
         <summary>View Raw Feature/Policy JSON</summary>

@@ -173,6 +173,49 @@ One-shot chat:
 
 Runtime control (device, policy, feature toggles, registry selection) is browser-first in `start_app.ps1` flow, via the app shell.
 
+## Anonymous Telemetry (Opt-In)
+
+AcouLM app shell includes a privacy-first telemetry sender that is **disabled by default**.
+
+What it sends when enabled:
+- event type (`app_start`, `session_heartbeat`, `chat_request`, `chat_response`, `chat_error`)
+- timestamp
+- anonymized install/session IDs
+- runtime metadata (active device, policy, selected model)
+- estimated input/output token counts
+
+What it does **not** send:
+- chat prompt text
+- model output text
+- local file paths
+
+### Run local telemetry receiver
+
+```powershell
+.\start_telemetry.ps1
+```
+
+Default endpoint:
+- Receiver: `http://127.0.0.1:8800/telemetry`
+- Summary: `http://127.0.0.1:8800/telemetry/summary?days=30`
+- Health: `http://127.0.0.1:8800/telemetry/health`
+
+Then in app shell (`http://localhost:5173`):
+1. Go to **Control -> System & health -> Telemetry (privacy-first)**.
+2. Enable **anonymous telemetry**.
+3. Set endpoint to `http://127.0.0.1:8800/telemetry`.
+4. Click **Save**.
+
+### Shared/team deployment
+
+If you want global user counts across machines, host `telemetry_server.py` on a shared server and set users' endpoint to that URL.
+For stronger anonymity across deployments, set salt:
+
+```powershell
+$env:ACOULM_TELEMETRY_SALT = "replace-with-long-random-secret"
+.\start_telemetry.ps1
+```
+
 ## Release Asset (for installer)
 
 `install.ps1` expects this exact GitHub Release asset name:
