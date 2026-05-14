@@ -30,7 +30,15 @@ npu_cache/
 
 # Marketing site (npm install / Vite); never commit dependencies
 site/node_modules/
-site/tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# Local benchmark / probe output (script + app shell feature compare)
+benchmark_outputs/
+
+# Root distribution zips (build in CI or locally; never commit large binaries)
+/*.zip
+loomis-dist-*.zip
+acoulm-dist-*.zip
 
 # OS / editor
 .vs/

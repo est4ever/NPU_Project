@@ -177,7 +177,7 @@ Runtime control (device, policy, feature toggles, registry selection) is browser
 
 To compare **AcouLM routing features on vs a simpler baseline** on your machine (same prompt, same `max_tokens`, client wall time plus server metrics):
 
-**PowerShell (writes JSON under `benchmark_outputs/`):**
+**PowerShell (writes JSON under `benchmark_outputs/` on your machine; that folder is gitignored and not part of the clone):**
 
 ```powershell
 .\benchmark_acoulm_toggle.ps1
