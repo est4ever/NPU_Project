@@ -2482,6 +2482,12 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       action: () => runBenchmarkSuite(),
     },
     {
+      id: "run-toggle-benchmark",
+      label: "Run Feature Compare (AcouLM vs baseline)",
+      keywords: "bench ab toggle split context routing",
+      action: () => runToggleBenchmarkSuite(),
+    },
+    {
       id: "discover-models",
       label: "Discover Unregistered models\\ Folders",
       keywords: "discover import folder",
@@ -2924,6 +2930,300 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     "In one short phrase, name a color.",
   ];
 
+  const TOGGLE_BENCH_PROMPT =
+    "Write five concise bullet points about why local LLM inference can improve privacy.";
+
+  function readBenchToggleParams() {
+    const w = Math.max(0, Math.min(5, Number.parseInt(String(el("benchToggleWarmup")?.value || "1"), 10) || 0));
+    const t = Math.max(1, Math.min(20, Number.parseInt(String(el("benchToggleTimed")?.value || "4"), 10) || 4));
+    const m = Math.max(16, Math.min(2048, Number.parseInt(String(el("benchToggleMaxTok")?.value || "128"), 10) || 128));
+    return { warmupRuns: w, timedRuns: t, maxTokens: m };
+  }
+
+  function captureFeatureToggleState() {
+    const pick = (name) => {
+      const cb = document.querySelector(`.feature-toggle[data-feature='${name}']`);
+      return Boolean(cb && cb.checked);
+    };
+    return {
+      splitPrefill: pick("split-prefill"),
+      contextRouting: pick("context-routing"),
+      optimizeMemory: pick("optimize-memory"),
+    };
+  }
+
+  async function applyBenchFeatureState(splitPrefill, contextRouting, optimizeMemory) {
+    await trySetFeatureBench("split-prefill", splitPrefill);
+    await trySetFeatureBench("context-routing", contextRouting);
+    await trySetFeatureBench("optimize-memory", optimizeMemory);
+  }
+
+  async function trySetFeatureBench(name, enabled) {
+    try {
+      await setFeatureToggle(name, enabled);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: String(err.message || err) };
+    }
+  }
+
+  async function restoreFeatureTogglesFromSnapshot(snap) {
+    if (!snap) return;
+    await applyBenchFeatureState(snap.splitPrefill, snap.contextRouting, snap.optimizeMemory);
+  }
+
+  function averageBenchNums(vals) {
+    const n = vals.filter((x) => Number.isFinite(x));
+    if (!n.length) return null;
+    return n.reduce((a, b) => a + b, 0) / n.length;
+  }
+
+  function renderToggleBenchmarkTables(summaryRows, detailRows, footnote) {
+    const wrap = el("toggleBenchmarkWrap");
+    const note = el("toggleBenchmarkNote");
+    if (!wrap) return;
+    wrap.textContent = "";
+    if (note) {
+      note.textContent = footnote || "";
+    }
+    const mkTable = (headers, bodyRows) => {
+      const table = document.createElement("table");
+      table.className = "bench-table";
+      const thead = document.createElement("thead");
+      const hr = document.createElement("tr");
+      for (const h of headers) {
+        const th = document.createElement("th");
+        th.textContent = h;
+        hr.appendChild(th);
+      }
+      thead.appendChild(hr);
+      table.appendChild(thead);
+      const tb = document.createElement("tbody");
+      for (const r of bodyRows) {
+        const tr = document.createElement("tr");
+        for (const cell of r) {
+          const td = document.createElement("td");
+          td.textContent = cell != null ? String(cell) : "—";
+          tr.appendChild(td);
+        }
+        tb.appendChild(tr);
+      }
+      table.appendChild(tb);
+      return table;
+    };
+
+    const h1 = document.createElement("h4");
+    h1.className = "subpanel-title";
+    h1.textContent = "Summary (averages)";
+    wrap.appendChild(h1);
+    wrap.appendChild(
+      mkTable(
+        ["Scenario", "Runs", "Avg wall ms", "Avg TTFT", "Avg TPOT", "Avg TPS"],
+        summaryRows.map((s) => [
+          s.scenario,
+          String(s.runs),
+          s.avgWall != null ? s.avgWall.toFixed(1) : "—",
+          s.avgTtft != null ? s.avgTtft.toFixed(1) : "—",
+          s.avgTpot != null ? s.avgTpot.toFixed(2) : "—",
+          s.avgTps != null ? s.avgTps.toFixed(3) : "—",
+        ])
+      )
+    );
+
+    const h2 = document.createElement("h4");
+    h2.className = "subpanel-title";
+    h2.style.marginTop = "12px";
+    h2.textContent = "Timed runs (detail)";
+    wrap.appendChild(h2);
+    wrap.appendChild(
+      mkTable(
+        ["Scenario", "#", "Wall ms", "TTFT", "TPOT", "TPS", "Note"],
+        detailRows.map((r) => [
+          r.scenario,
+          String(r.runIndex),
+          r.wallMs != null ? r.wallMs.toFixed(1) : "—",
+          r.ttft != null ? Number(r.ttft).toFixed(1) : "—",
+          r.tpot != null ? Number(r.tpot).toFixed(2) : "—",
+          r.tps != null ? Number(r.tps).toFixed(3) : "—",
+          r.note || "",
+        ])
+      )
+    );
+  }
+
+  async function runOneToggleBenchInference(prompt, maxTokens, modelId) {
+    const t0 = performance.now();
+    try {
+      await requestJson("/chat/completions", {
+        method: "POST",
+        headers: { "x-npu-cli": "true" },
+        body: JSON.stringify({
+          model: modelId,
+          messages: [{ role: "user", content: prompt }],
+          stream: false,
+          temperature: 0.1,
+          max_tokens: maxTokens,
+        }),
+      });
+    } catch (err) {
+      return {
+        wallMs: performance.now() - t0,
+        ttft: null,
+        tpot: null,
+        tps: null,
+        note: String(err.message || err),
+      };
+    }
+    const wallMs = performance.now() - t0;
+    let m = {};
+    try {
+      m = await requestJson("/cli/metrics?mode=last", { method: "GET" });
+    } catch {
+      m = {};
+    }
+    let s = {};
+    try {
+      s = await requestJson("/cli/status", { method: "GET" });
+    } catch {
+      s = {};
+    }
+    const tpsRaw = m.throughput_tok_s ?? m.throughput ?? s.throughput;
+    const tps = Number.isFinite(Number(tpsRaw)) ? Number(tpsRaw) : null;
+    return {
+      wallMs,
+      ttft: m.ttft_ms ?? s.ttft_ms,
+      tpot: m.tpot_ms ?? s.tpot_ms,
+      tps,
+      note: "ok",
+    };
+  }
+
+  async function runToggleBenchScenario(name, opts, prompt, modelId, warmupRuns, timedRuns, maxTokens) {
+    const { splitPrefill, contextRouting } = opts;
+    const notes = [];
+    const splitResult = await trySetFeatureBench("split-prefill", splitPrefill);
+    await trySetFeatureBench("context-routing", contextRouting);
+    await trySetFeatureBench("optimize-memory", contextRouting);
+    if (splitPrefill && !splitResult.ok) {
+      notes.push(`split-prefill: ${splitResult.error || "failed"} (continuing with split-prefill off).`);
+      await trySetFeatureBench("split-prefill", false);
+    }
+    try {
+      await requestJson("/cli/metrics?mode=clear", { method: "GET" });
+    } catch {
+      // ignore
+    }
+
+    for (let i = 0; i < warmupRuns; i += 1) {
+      await runOneToggleBenchInference(prompt, maxTokens, modelId);
+    }
+
+    const rows = [];
+    for (let i = 0; i < timedRuns; i += 1) {
+      const r = await runOneToggleBenchInference(prompt, maxTokens, modelId);
+      rows.push({
+        scenario: name,
+        runIndex: i + 1,
+        wallMs: r.wallMs,
+        ttft: r.ttft != null ? Number(r.ttft) : null,
+        tpot: r.tpot != null ? Number(r.tpot) : null,
+        tps: r.tps,
+        note: r.note,
+      });
+    }
+    return { rows, notes };
+  }
+
+  async function runToggleBenchmarkSuite() {
+    const snap = captureFeatureToggleState();
+    let completedOk = false;
+    setButtonBusy("btnToggleBenchmark", true);
+    const noteEl = el("toggleBenchmarkNote");
+    const wrap = el("toggleBenchmarkWrap");
+    if (wrap) wrap.textContent = "";
+    if (noteEl) noteEl.textContent = "Running feature compare…";
+    try {
+      const { warmupRuns, timedRuns, maxTokens } = readBenchToggleParams();
+      let modelId = "openvino";
+      if (statusCache && statusCache.selected_model) {
+        modelId = statusCache.selected_model;
+      } else {
+        try {
+          const s = await requestJson("/cli/status", { method: "GET" });
+          if (s && s.selected_model) modelId = s.selected_model;
+        } catch {
+          // keep default
+        }
+      }
+
+      const allNotes = [];
+      const footEnabled = await runToggleBenchScenario(
+        "acoulm_enabled",
+        { splitPrefill: true, contextRouting: true },
+        TOGGLE_BENCH_PROMPT,
+        modelId,
+        warmupRuns,
+        timedRuns,
+        maxTokens
+      );
+      allNotes.push(...footEnabled.notes);
+
+      const footBaseline = await runToggleBenchScenario(
+        "baseline_single_path",
+        { splitPrefill: false, contextRouting: false },
+        TOGGLE_BENCH_PROMPT,
+        modelId,
+        warmupRuns,
+        timedRuns,
+        maxTokens
+      );
+      allNotes.push(...footBaseline.notes);
+
+      const enabledRows = footEnabled.rows;
+      const baselineRows = footBaseline.rows;
+
+      function summarizeToggle(label, list) {
+        return {
+          scenario: label,
+          runs: list.length,
+          avgWall: averageBenchNums(list.map((x) => x.wallMs)),
+          avgTtft: averageBenchNums(list.map((x) => x.ttft)),
+          avgTpot: averageBenchNums(list.map((x) => x.tpot)),
+          avgTps: averageBenchNums(list.map((x) => x.tps)),
+        };
+      }
+      const s1 = summarizeToggle("acoulm_enabled", enabledRows);
+      const s2 = summarizeToggle("baseline_single_path", baselineRows);
+
+      const detailRows = [...enabledRows, ...baselineRows];
+      const foot = allNotes.length ? allNotes.join(" ") : "";
+      renderToggleBenchmarkTables([s1, s2], detailRows, foot);
+
+      addActivity("Feature compare benchmark finished", "ready");
+      setSystemFeedback("Feature compare finished — see tables below.", "ok");
+      completedOk = true;
+      try {
+        await fetchMetrics(true, "last");
+      } catch {
+        // ignore
+      }
+    } catch (err) {
+      const m = String(err.message || err);
+      if (noteEl) noteEl.textContent = m;
+      setSystemFeedback(`Feature compare failed: ${m}`, "error");
+      addActivity(`Feature compare failed: ${m}`, "error");
+    } finally {
+      await restoreFeatureTogglesFromSnapshot(snap).catch(() => {});
+      await refreshStatus().catch(() => {});
+      const ne = el("toggleBenchmarkNote");
+      if (completedOk && ne) {
+        const cur = String(ne.textContent || "").trim();
+        ne.textContent = cur ? `${cur} Original feature toggles restored.` : "Original feature toggles restored.";
+      }
+      setButtonBusy("btnToggleBenchmark", false);
+    }
+  }
+
   function renderBenchmarkTable(rows) {
     const wrap = el("benchmarkTableWrap");
     if (!wrap) {
@@ -3343,6 +3643,9 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     });
     on("btnBenchmarkRun", "click", () => {
       void runBenchmarkSuite();
+    });
+    on("btnToggleBenchmark", "click", () => {
+      void runToggleBenchmarkSuite();
     });
     on("btnPasteImport", "click", () => {
       void pasteImportFromClipboard();

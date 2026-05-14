@@ -214,6 +214,22 @@
         <button id="btnBenchmarkRun" type="button" class="ghost">Run 3 test prompts</button>
       </div>
       <div id="benchmarkTableWrap" class="bench-wrap"></div>
+      <h3 class="subpanel-title">Feature compare (AcouLM vs baseline)</h3>
+      <p class="hint">Same sequence as <kbd>.\benchmark_acoulm_toggle.ps1</kbd>: tries split-prefill + context-routing + optimize-memory, then a baseline with those off, on one fixed prompt. Your feature toggles are restored when the run finishes. If split-prefill cannot enable (for example HTTP 409), the run continues with split-prefill off.</p>
+      <div class="row bench-toggle-row">
+        <label>Warmup runs
+          <input id="benchToggleWarmup" type="number" min="0" max="5" value="1" />
+        </label>
+        <label>Timed runs
+          <input id="benchToggleTimed" type="number" min="1" max="20" value="4" />
+        </label>
+        <label>Max tokens
+          <input id="benchToggleMaxTok" type="number" min="16" max="2048" value="128" />
+        </label>
+        <button id="btnToggleBenchmark" type="button" class="ghost">Run feature compare</button>
+      </div>
+      <p id="toggleBenchmarkNote" class="hint" role="status" aria-live="polite"></p>
+      <div id="toggleBenchmarkWrap" class="bench-wrap"></div>
       <h3 class="subpanel-title">Unregistered <code>models\</code> folders</h3>
       <div id="discoverModelsHost" class="discover-box"></div>
     </section>

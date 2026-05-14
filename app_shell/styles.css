@@ -1702,6 +1702,11 @@ body[data-theme="dark"] .system-feedback[data-kind="error"] {
   font-weight: 600;
 }
 
+.bench-toggle-row input[type="number"] {
+  width: 4.5rem;
+  margin-left: 0.35rem;
+}
+
 .bench-wrap {
   min-height: 1.2em;
 }

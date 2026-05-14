@@ -4,6 +4,7 @@
 #include <windows.h>
 
 #include "../OpenVINO/Backend/BackendPool.h"
+#include "../OpenVINO/Backend/IBackend.h"
 #include "../OpenVINO/Backend/KVCacheMonitor.h"
 #include "../OpenVINO/Scheduler/OpenVINOScheduler.h"
 #include "SpeculativeEngine.h"
@@ -40,6 +41,37 @@ namespace {
 static void logline(const std::string& s) {
     std::ofstream f("runlog.txt", std::ios::app);
     f << s << std::endl;
+}
+
+// One tiny generation before HTTP listen so the first user chat is less likely to pay full JIT/graph cost.
+// Opt out: set env ACOULM_SKIP_STARTUP_WARMUP=1
+static void maybe_startup_server_warmup(BackendPool& pool, bool speculative_mode) {
+    if (speculative_mode) {
+        return;
+    }
+    const char* skip = std::getenv("ACOULM_SKIP_STARTUP_WARMUP");
+    if (skip && skip[0] == '1' && skip[1] == '\0') {
+        return;
+    }
+    IBackend* backend = pool.get_active_backend();
+    if (!backend) {
+        return;
+    }
+    try {
+        const auto t0 = std::chrono::steady_clock::now();
+        std::cout << "[Server Mode] Warming active device (" << pool.get_active_device()
+                  << ") to reduce first-chat latency...\n"
+                  << std::flush;
+        (void)backend->generate_output("User: .\nAssistant: ", 2, 0.0f, false);
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - t0)
+                            .count();
+        std::cout << "[Server Mode] Warmup complete (" << ms << " ms).\n" << std::flush;
+    } catch (const std::exception& e) {
+        std::cerr << "[Server Mode] Warmup failed (non-fatal): " << e.what() << "\n" << std::flush;
+    } catch (...) {
+        std::cerr << "[Server Mode] Warmup failed (non-fatal).\n" << std::flush;
+    }
 }
 
 // Strip one layer of wrapping quotes (common when paths are copy-pasted into JSON or shells).
@@ -931,6 +963,7 @@ int main(int argc, char** argv) {
                 server_config.set_enable_kv_paging(enable_kv_paging);
                 server_config.set_prefill_threshold_high(prefill_threshold_high);
 
+                maybe_startup_server_warmup(pool, speculative_mode);
                 save_npu_launch_state(argc, argv);
                 RestAPIServer api_server(&pool, &server_config, &kv_monitor, server_port);
                 
@@ -1219,6 +1252,7 @@ int main(int argc, char** argv) {
                 server_config.prefill_device = prefill_device;
                 server_config.decode_device = decode_device;
 
+                maybe_startup_server_warmup(pool, speculative_mode);
                 save_npu_launch_state(argc, argv);
                 RestAPIServer api_server(&pool, &server_config, &kv_monitor, server_port);
                 

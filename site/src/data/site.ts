@@ -16,6 +16,7 @@ export const quickStartCommands = [
   { title: "One command (daily use)", command: "acoulm" },
   { title: "Start (UI + API)", command: ".\\start_app.ps1" },
   { title: "Optional: persist performance mode", command: ".\\start_app.ps1 -PerformanceMode" },
+  { title: "Feature A/B benchmark (PowerShell)", command: ".\\benchmark_acoulm_toggle.ps1" },
   { title: "Terminal Chat (direct)", command: ".\\npu_cli.ps1" },
   { title: "One-shot Chat", command: ".\\npu_cli.ps1 -Command chat -Arguments \"hello\"" },
 ];
@@ -68,7 +69,7 @@ export const features = [
   },
   {
     title: "Metrics & Diagnostics",
-    description: "Track runtime health and latency signals for practical troubleshooting.",
+    description: "Track runtime health and latency signals for practical troubleshooting, including optional feature A/B benchmarks in the Control panel or via benchmark_acoulm_toggle.ps1.",
   },
 ];
 

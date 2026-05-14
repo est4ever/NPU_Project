@@ -609,16 +609,20 @@ function Show-MetricsBlock {
     } catch {}
 
     $ram = "-"
+    $ramHint = ""
     try {
         $mem = Invoke-Api "/v1/cli/memory"
         $used  = [double]($mem.ram.used_mb)
         $total = [double]($mem.ram.total_mb)
         if ($used -gt 0) {
             $ram = if ($total -gt 0) { "{0:N0}/{1:N0}MB" -f $used, $total } else { "{0:N0}MB" -f $used }
+            if ($total -gt 0 -and ($used / $total) -ge 0.90) {
+                $ramHint = " · RAM>90% (paging can inflate TTFT/TPOT)"
+            }
         }
     } catch {}
 
-    Write-Dim  "  $device · $policy · $model  |  TTFT $ttft  TPOT $tpot  TPS $tps  Latency $latency  RAM $ram"
+    Write-Dim  "  $device · $policy · $model  |  TTFT $ttft  TPOT $tpot  TPS $tps  Latency $latency  RAM $ram$ramHint"
 }
 
 # ---------------------------------------------------------------------------

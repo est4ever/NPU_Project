@@ -173,6 +173,29 @@ One-shot chat:
 
 Runtime control (device, policy, feature toggles, registry selection) is browser-first in `start_app.ps1` flow, via the app shell.
 
+### Feature A/B benchmark (optional)
+
+To compare **AcouLM routing features on vs a simpler baseline** on your machine (same prompt, same `max_tokens`, client wall time plus server metrics):
+
+**PowerShell (writes JSON under `benchmark_outputs/`):**
+
+```powershell
+.\benchmark_acoulm_toggle.ps1
+```
+
+Requires the stack running (`.\start_app.ps1`) and the API reachable at `http://127.0.0.1:8000` (override with `-ApiBase`). NVIDIA VRAM is sampled only when `nvidia-smi` is available; Intel GPU/NPU paths typically leave VRAM blank in that script.
+
+**Browser control panel:** open the app shell → **Control** → **System & health** → **Feature compare (AcouLM vs baseline)** → **Run feature compare**. This mirrors the PowerShell harness and restores your feature toggles afterward.
+
+**Illustrative numbers (not a guarantee — one Windows + GPU sample, `max_tokens=128`, four timed runs after one warmup):** in that run, enabling `split-prefill` failed with HTTP 409, so the “features on” side used **context-routing** + **optimize-memory** only (split-prefill stayed off). Averages from `benchmark_outputs/bench_summary_20260514-142010.json`:
+
+| Scenario | Avg wall (ms) | Avg TTFT (ms) | Avg TPOT (ms) | Avg TPS (status) |
+|----------|---------------:|---------------:|---------------:|-----------------:|
+| AcouLM features (as applied) | 20,821 | 187 | 162 | 6.17 |
+| Baseline single path | 21,705 | 191 | 169 | 5.95 |
+
+The marketing site home page includes the same table for quick reference; always re-run the benchmark on your own hardware and model.
+
 ## Anonymous Telemetry (Opt-In)
 
 AcouLM app shell includes a privacy-first telemetry sender that is **disabled by default**.

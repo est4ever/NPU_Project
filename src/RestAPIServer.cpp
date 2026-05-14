@@ -1014,6 +1014,50 @@ std::string profile_for_policy(EnginePolicy p) {
     }
 }
 
+double clamp01(double v) {
+    if (v < 0.0) return 0.0;
+    if (v > 1.0) return 1.0;
+    return v;
+}
+
+double estimated_watts_for_device(const std::string& device, double throughput_tok_s) {
+    std::string d = device;
+    std::transform(d.begin(), d.end(), d.begin(), ::toupper);
+
+    double base_w = 5.0;
+    double peak_additional_w = 12.0;
+    if (d == "CPU") {
+        base_w = 10.0;
+        peak_additional_w = 35.0;
+    } else if (d == "GPU") {
+        base_w = 8.0;
+        peak_additional_w = 40.0;
+    } else if (d == "NPU") {
+        base_w = 3.0;
+        peak_additional_w = 10.0;
+    }
+
+    const double throughput_norm = clamp01(throughput_tok_s / 10.0);
+    return base_w + (peak_additional_w * throughput_norm);
+}
+
+void attach_power_estimates(json& response) {
+    const std::string device = response.value("device", std::string("UNKNOWN"));
+    const double throughput_tok_s = response.value("throughput_tok_s", response.value("throughput", 0.0));
+    const double est_watts = estimated_watts_for_device(device, throughput_tok_s);
+
+    response["power_estimated_w"] = est_watts;
+    response["power_estimation_source"] = "heuristic";
+    response["power_estimation_note"] =
+        "Estimated from active device and throughput (not direct sensor watt telemetry).";
+
+    if (throughput_tok_s > 0.0) {
+        response["energy_per_token_estimated_mJ"] = (est_watts / throughput_tok_s) * 1000.0;
+    } else {
+        response["energy_per_token_estimated_mJ"] = -1.0;
+    }
+}
+
 void persist_performance_profile(const RuntimeConfig* config) {
     if (!config) return;
     json j = {
@@ -1388,6 +1432,8 @@ void RestAPIServer::handle_chat_completions(const httplib::Request& req, httplib
                 {"total_ms", total_ms},
                 {"completion_tokens", completion_tokens}
             };
+
+            attach_power_estimates(metrics_record);
 
             append_metrics_record(metrics_record);
         }
@@ -1839,8 +1885,10 @@ void RestAPIServer::handle_cli_metrics(const httplib::Request& req, httplib::Res
                     {"throughput_tok_s", live.throughput},
                     {"note", "No persisted metrics record found yet; showing current backend metrics."}
                 };
+                attach_power_estimates(response);
             } else {
                 response = record.value();
+                attach_power_estimates(response);
             }
         } else if (mode == "summary") {
             const auto records = read_all_metrics_records();
@@ -1872,6 +1920,11 @@ void RestAPIServer::handle_cli_metrics(const httplib::Request& req, httplib::Res
                     {"avg_tpot_ms", tpot_count > 0 ? tpot_sum / tpot_count : 0.0},
                     {"avg_throughput", throughput_count > 0 ? throughput_sum / throughput_count : 0.0}
                 };
+                response["device"] = backend_pool_->get_active_device();
+                response["throughput_tok_s"] = response["avg_throughput"];
+                attach_power_estimates(response);
+                response["avg_power_estimated_w"] = response["power_estimated_w"];
+                response["avg_energy_per_token_estimated_mJ"] = response["energy_per_token_estimated_mJ"];
             }
         } else if (mode == "clear") {
             const size_t removed = clear_metrics_files();

@@ -415,11 +415,8 @@ if ($sub) {
             if (-not (Test-Path -LiteralPath $start)) { throw "Missing start_app.ps1 at $start" }
             Write-AcouLMBanner
             Write-Host "[AcouLM] Launching stack (hidden). Browser may open to the control panel before the API is up." -ForegroundColor Cyan
+            # start_app.ps1 -OpenBrowser opens once when the control panel is ready; do not also open from this process (double tab).
             Start-StackHidden -TimeoutSeconds $defaultStartupTimeoutSeconds -OpenBrowser -HideServiceWindows
-            # Parent-process fallback: hidden child launch can fail to open a tab on some Windows setups.
-            if (-not (Open-ControlPanelUrl -Url "http://localhost:5173/")) {
-                Write-Host "[AcouLM] Could not auto-open browser. Open manually: http://localhost:5173/" -ForegroundColor Yellow
-            }
             $ok = Wait-ApiReadyWithTerminalMessage -Base $ApiBase -TimeoutSec $defaultStartupTimeoutSeconds `
                 -Hint "Keep http://localhost:5173/ open — refresh if the page stays on loading."
             if ($ok) {
@@ -492,76 +489,27 @@ if ($Passthrough -and $Passthrough.Count -gt 0) {
 } else {
     if (-not (Test-Path -LiteralPath $start)) { throw "Missing start_app.ps1 at $start" }
 
-    # Ensure both backend API and local control panel are available before chat.
+    # Keep default flow simple: hidden stack start (if needed) + terminal chat UX.
     $apiReady = Test-ApiReady -Base $ApiBase
     $appShellReady = Test-AppShellReady -Port 5173
-    $launchedStack = $false
+    $browserOpenedByChild = $false
     if ((-not $apiReady) -and (-not $appShellReady)) {
-        # Cold start: control panel + API (same as start_app full path), then terminal chat below.
-        Write-Host "[AcouLM] Starting control panel + API, then terminal chat. First model load can take several minutes." -ForegroundColor Cyan
+        Write-Host "[AcouLM] Starting control panel + API in background..." -ForegroundColor Cyan
         Start-StackHidden -TimeoutSeconds $defaultStartupTimeoutSeconds -OpenBrowser -HideServiceWindows
-        $launchedStack = $true
+        $browserOpenedByChild = $true
     } elseif ($apiReady -and (-not $appShellReady)) {
-        # Fast path: API already warm; start app shell only (avoid backend restart/reload).
         Write-Host "[AcouLM] API already running; starting control panel on :5173..." -ForegroundColor Cyan
         Start-AppShellOnlyHidden -Port 5173 -OpenBrowser
+        $browserOpenedByChild = $true
     } elseif ((-not $apiReady) -and $appShellReady) {
-        # API down but app shell up: if backend process exists, avoid immediate restart churn.
-        if (Test-BackendProcessRunning) {
-            Write-Host "[AcouLM] Backend process is already running; waiting for API before forcing a restart..." -ForegroundColor Cyan
-            $launchedStack = $true
-        } else {
-            Write-Host "[AcouLM] Restarting backend; http://localhost:5173 may show loading until the API is ready." -ForegroundColor Cyan
-            Start-StackHidden -TimeoutSeconds $defaultStartupTimeoutSeconds -OpenBrowser -HideServiceWindows
-            $launchedStack = $true
-        }
+        Start-StackHidden -TimeoutSeconds $defaultStartupTimeoutSeconds -OpenBrowser -HideServiceWindows
+        $browserOpenedByChild = $true
     }
-    if ($launchedStack) {
-        Write-Host "[AcouLM] Opening terminal chat now while backend finishes loading. Control panel: http://localhost:5173/" -ForegroundColor DarkGray
-        Write-Host "[AcouLM] Waiting briefly for backend readiness..." -ForegroundColor DarkGray
-        $briefReady = Wait-ApiReadyBrief -Base $ApiBase -TimeoutSec 20
-        if (-not $briefReady) {
-            if (Test-BackendProcessRunning) {
-                Write-Host "[AcouLM] Backend still not ready; forcing one clean restart now..." -ForegroundColor DarkYellow
-                Start-StackHidden -TimeoutSeconds $defaultStartupTimeoutSeconds -OpenBrowser -HideServiceWindows
-                $briefReady = Wait-ApiReadyBrief -Base $ApiBase -TimeoutSec 20
-            }
-            if (-not $briefReady) {
-                Write-Host "[AcouLM] Backend is still offline after retry. Chat may show warming-up until it is ready." -ForegroundColor DarkYellow
-                Write-Host "[AcouLM] Run .\start_app.ps1 (visible) to inspect backend logs if this persists." -ForegroundColor DarkYellow
-            }
-        }
-        if (-not $briefReady) {
-            # Final recovery: run backend startup in-process with visible backend window so failures are surfaced.
-            Write-Host "[AcouLM] Running synchronous backend recovery (visible backend window)..." -ForegroundColor Yellow
-            try {
-                & $start -TimeoutSeconds 120 -SkipAppShell
-                $briefReady = Wait-ApiReadyBrief -Base $ApiBase -TimeoutSec 10
-            } catch {
-                Write-Host "[AcouLM] Recovery launch failed: $($_.Exception.Message)" -ForegroundColor Red
-            }
-        }
-    }
-    # Always attempt to open the control panel from this parent process.
-    # This guarantees browser-open behavior even if hidden child launchers cannot open a tab.
-    $null = Open-ControlPanelUrl -Url "http://localhost:5173/"
-    if (-not (Test-ApiReady -Base $ApiBase)) {
-        # Final self-heal path for default `acoulm`: do one synchronous full startup wait
-        # so users do not need to type any command besides `acoulm`.
-        Write-Host "[AcouLM] API still offline; running one full self-heal startup..." -ForegroundColor Yellow
-        try {
-            & $start -TimeoutSeconds $defaultStartupTimeoutSeconds -OpenBrowser -HideServiceWindows
-        } catch {
-            Write-Host "[AcouLM] Self-heal launch failed: $($_.Exception.Message)" -ForegroundColor Red
-        }
 
-        if (-not (Wait-ApiReadyWithTerminalMessage -Base $ApiBase -TimeoutSec $defaultStartupTimeoutSeconds -Hint "AcouLM is still self-healing. Please keep this terminal open.")) {
-            Write-Host "[AcouLM] API is still offline after self-heal." -ForegroundColor Red
-            Write-Host "[AcouLM] Just run 'acoulm' again; it will keep auto-recovering." -ForegroundColor DarkYellow
-            exit 1
-        }
+    # Open here only when nothing above asked start_app / app shell to open a tab (e.g. API + control panel already up).
+    if (-not $browserOpenedByChild) {
+        $null = Open-ControlPanelUrl -Url "http://localhost:5173/"
     }
-    Invoke-AutoTuneFastPreset -Base $ApiBase
     & $cli -Command chat
 }
 

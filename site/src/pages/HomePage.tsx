@@ -3,6 +3,7 @@ import { Hero } from "../components/Hero";
 import { FeatureGrid } from "../components/FeatureGrid";
 import { PathTracks } from "../components/PathTracks";
 import { QuickStart } from "../components/QuickStart";
+import { BenchmarkSample } from "../components/BenchmarkSample";
 
 export function HomePage() {
   return (
@@ -16,6 +17,7 @@ export function HomePage() {
         <QuickStart limit={3} showHeader={false} />
       </section>
       <FeatureGrid />
+      <BenchmarkSample />
       <section className="section-wrap rounded-xl border border-line bg-panel/80 p-7">
         <p className="font-mono text-xs uppercase tracking-[0.2em] text-accent/90">// Documentation</p>
         <h2 className="mt-2 section-title">Move from quick setup to full control</h2>
