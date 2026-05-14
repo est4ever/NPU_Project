@@ -1,6 +1,6 @@
 export function BenchmarkSample() {
   return (
-    <section className="section-wrap rounded-xl border border-line bg-panel/80 p-7">
+    <section id="sample-benchmark" className="section-wrap scroll-mt-28 rounded-xl border border-line bg-panel/80 p-7">
       <p className="font-mono text-xs uppercase tracking-[0.2em] text-accent/90">// Illustrative only</p>
       <h2 className="mt-2 section-title text-3xl">Sample feature A/B (local run)</h2>
       <p className="section-subtitle mt-2">

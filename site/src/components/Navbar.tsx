@@ -1,4 +1,4 @@
-import { NavLink } from "react-router-dom";
+import { Link, NavLink } from "react-router-dom";
 
 const links = [
   { label: "Home", to: "/" },
@@ -34,6 +34,14 @@ export function Navbar() {
               </NavLink>
             </li>
           ))}
+          <li>
+            <Link
+              to="/#sample-benchmark"
+              className="rounded-md px-3 py-1.5 transition hover:text-accent"
+            >
+              Sample benchmark
+            </Link>
+          </li>
           <li>
             <a
               href="https://github.com/est4ever/AcouLM"

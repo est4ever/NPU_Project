@@ -194,7 +194,7 @@ Requires the stack running (`.\start_app.ps1`) and the API reachable at `http://
 | AcouLM features (as applied) | 20,821 | 187 | 162 | 6.17 |
 | Baseline single path | 21,705 | 191 | 169 | 5.95 |
 
-The marketing site home page includes the same table for quick reference; always re-run the benchmark on your own hardware and model.
+The same table is on the marketing site for quick reference: [Sample feature A/B](https://est4ever.github.io/AcouLM/#sample-benchmark) (home page anchor). Always re-run the benchmark on your own hardware and model.
 
 ## Anonymous Telemetry (Opt-In)
 
