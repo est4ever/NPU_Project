@@ -538,12 +538,18 @@ if (window.__NPU_APP_SHELL_LOADED__) {
 
   /** Per-request timeout so a dead/wrong API base fails fast instead of hanging. */
   const API_FETCH_TIMEOUT_MS = 5000;
+  /** Chat completions can queue behind other requests (serialized backend); allow long local runs. */
+  const CHAT_COMPLETION_FETCH_TIMEOUT_MS = 300000;
+  /** OpenVINO compile + model load routinely exceeds the default 5s API timeout. */
+  const DEVICE_LOAD_FETCH_TIMEOUT_MS = 600000;
+  /** Health probe should fail fast so the UI does not sit in "checking" for a full API timeout. */
+  const HEALTH_PROBE_FETCH_TIMEOUT_MS = 3500;
 
-  function friendlyFetchError(err, baseUrlShown) {
+  function friendlyFetchError(err, baseUrlShown, abortTimeoutMs = API_FETCH_TIMEOUT_MS) {
     const name = err && err.name;
     const msg = String((err && err.message) || err || "unknown error");
     if (name === "AbortError" || /aborted/i.test(msg)) {
-      return `Timed out after ${API_FETCH_TIMEOUT_MS / 1000}s — no response from ${baseUrlShown}. Check the API base URL and that the stack is running.`;
+      return `Timed out after ${abortTimeoutMs / 1000}s — no response from ${baseUrlShown}. Check the API base URL and that the stack is running.`;
     }
     if (msg === "Failed to fetch" || /NetworkError|Load failed|ECONNREFUSED/i.test(msg)) {
       return `Failed to fetch ${baseUrlShown} — nothing answered (start .\start_app.ps1 or acoulm; URL must match the REST API, usually ending in /v1).`;
@@ -554,10 +560,18 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   async function requestJson(path, options = {}, allowFallback = true) {
     const currentBase = baseUrl();
     const url = `${currentBase}${path}`;
+    const fetchOpts = { ...(options || {}) };
+    const timeoutMs =
+      typeof fetchOpts.timeoutMs === "number" &&
+      Number.isFinite(fetchOpts.timeoutMs) &&
+      fetchOpts.timeoutMs > 0
+        ? fetchOpts.timeoutMs
+        : API_FETCH_TIMEOUT_MS;
+    delete fetchOpts.timeoutMs;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), API_FETCH_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const { headers: optHeaders, ...restFetch } = options;
+      const { headers: optHeaders, ...restFetch } = fetchOpts;
       const response = await fetch(url, {
         ...restFetch,
         signal: controller.signal,
@@ -581,7 +595,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       setConnectionState("online");
       return payload;
     } catch (err) {
-      const mapped = new Error(friendlyFetchError(err, currentBase));
+      const mapped = new Error(friendlyFetchError(err, currentBase, timeoutMs));
       mapped.cause = err;
       // If the configured API base is wrong/unreachable, auto-heal to known local defaults once.
       const fallbackCandidates = [
@@ -1635,6 +1649,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         await requestJson("/cli/device/load", {
           method: "POST",
           body: JSON.stringify({ device: target }),
+          timeoutMs: DEVICE_LOAD_FETCH_TIMEOUT_MS,
         });
       }
       const result = await requestJson("/cli/device/switch", {
@@ -1678,6 +1693,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       const result = await requestJson("/cli/device/load", {
         method: "POST",
         body: JSON.stringify({ device: target }),
+        timeoutMs: DEVICE_LOAD_FETCH_TIMEOUT_MS,
       });
       el("loadStatus").textContent = `✓ Model loaded on ${target}`;
       el("loadStatus").className = "status-indicator success";
@@ -2025,6 +2041,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         await requestJson("/cli/device/load", {
           method: "POST",
           body: JSON.stringify({ device: target }),
+          timeoutMs: DEVICE_LOAD_FETCH_TIMEOUT_MS,
         });
         addActivity(`Model loaded on ${target}`, "ready");
         await refreshStatus(); // Updates loaded devices in statusCache
@@ -2146,6 +2163,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       const resp = await requestJson("/chat/completions", {
         method: "POST",
         headers: { "x-npu-cli": "true" },
+        timeoutMs: CHAT_COMPLETION_FETCH_TIMEOUT_MS,
         body: JSON.stringify({
           model: modelId,
           messages: [{ role: "user", content: text }],
@@ -2219,6 +2237,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       const resp = await requestJson("/chat/completions", {
         method: "POST",
         headers: { "x-npu-cli": "true" },
+        timeoutMs: CHAT_COMPLETION_FETCH_TIMEOUT_MS,
         body: JSON.stringify({
           model: modelId,
           messages: [
@@ -2250,10 +2269,10 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   async function probeConnection() {
     setConnectionState("checking");
     try {
-      const result = await requestJson("/health", { method: "GET" });
-      if (!cliEventsConnected) {
-        startCliEvents();
-      }
+      const result = await requestJson("/health", {
+        method: "GET",
+        timeoutMs: HEALTH_PROBE_FETCH_TIMEOUT_MS,
+      });
       const status = el("statusOutput");
       if (status) {
         status.textContent = `API reachable. backend=${result.backend} status=${result.status}`;
@@ -3158,6 +3177,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       await requestJson("/chat/completions", {
         method: "POST",
         headers: { "x-npu-cli": "true" },
+        timeoutMs: CHAT_COMPLETION_FETCH_TIMEOUT_MS,
         body: JSON.stringify({
           model: modelId,
           messages: [{ role: "user", content: prompt }],
@@ -3200,11 +3220,11 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   }
 
   async function applyToggleBenchFeatureState(opts) {
-    const { splitPrefill, contextRouting } = opts;
+    const { splitPrefill, contextRouting, optimizeMemory = false } = opts;
     const notes = [];
     const splitResult = await trySetFeatureBench("split-prefill", splitPrefill);
     await trySetFeatureBench("context-routing", contextRouting);
-    await trySetFeatureBench("optimize-memory", contextRouting);
+    await trySetFeatureBench("optimize-memory", optimizeMemory);
     if (splitPrefill && !splitResult.ok) {
       notes.push(`split-prefill: ${splitResult.error || "failed"} (continuing with split-prefill off).`);
       await trySetFeatureBench("split-prefill", false);
@@ -3625,6 +3645,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
           await requestJson("/chat/completions", {
             method: "POST",
             headers: { "x-npu-cli": "true" },
+            timeoutMs: CHAT_COMPLETION_FETCH_TIMEOUT_MS,
             body: JSON.stringify({
               model: modelId,
               messages: [{ role: "user", content: prompt }],
@@ -4007,7 +4028,6 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     void sendTelemetryEvent("app_start");
     bindGlobalShortcuts();
     startConnectionPolling();
-    startCliEvents();
     startPerformancePolling();
     bootstrap()
       .then(() =>
@@ -4017,6 +4037,9 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       )
       .catch(() => {
         // bootstrap() already reported errors
+      })
+      .finally(() => {
+        startCliEvents();
       });
   }
 
