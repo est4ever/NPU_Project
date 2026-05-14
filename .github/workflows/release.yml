@@ -16,7 +16,7 @@ jobs:
       OPENVINO_GENAI_ARCHIVE_URL: ${{ vars.OPENVINO_GENAI_ARCHIVE_URL }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Validate OpenVINO archive URL variable
         shell: pwsh
