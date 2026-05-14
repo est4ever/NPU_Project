@@ -826,7 +826,13 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       if (!node) return;
 
       const previous = normalizeDevice(node.value || "");
-      const next = (previous === "AUTO" || fullList.includes(previous)) ? previous : "AUTO";
+      const next = previous === "AUTO" || fullList.includes(previous) ? previous : "AUTO";
+
+      // chatDeviceTarget (and similar) may be a hidden <input> for JS compat — never rebuild with <option> nodes.
+      if (node.tagName !== "SELECT") {
+        node.value = next;
+        return;
+      }
 
       node.innerHTML = "";
       for (const item of fullList) {
@@ -1658,6 +1664,10 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       });
       printJson(el("devicePolicyOutput"), result);
       addActivity(`Device switched to ${result.new_active_device || target}`, "ready");
+      const resolved = normalizeDevice(result.new_active_device || target || "");
+      if (resolved && el("chatDeviceTarget")) {
+        el("chatDeviceTarget").value = resolved === "AUTO" ? "AUTO" : resolved;
+      }
       await refreshStatus();
     } catch (err) {
       el("devicePolicyOutput").textContent = String(err.message || err);
