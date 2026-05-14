@@ -7,7 +7,9 @@ param(
     # Interleave enabled/baseline each round (same run index = same thermal epoch) for paired deltas.
     [switch]$PairedInterleaved,
     # Resample each group independently to estimate CI for mean(enabled_wall) - mean(baseline_wall).
-    [int]$BootstrapSamples = 800
+    [int]$BootstrapSamples = 800,
+    # Poll GET /v1/health every 2s until success (use when starting .\start_app.ps1 in another window).
+    [int]$WaitForApiSec = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -520,8 +522,32 @@ function Build-FullAnalysis {
     }
 }
 
-Write-Host "Checking API health at $ApiBase..."
-$health = Invoke-ApiJson -Path "/v1/health" -Method "GET" -TimeoutSec 20
+Write-Host "Checking API health at ${ApiBase}/v1/health ..."
+$health = $null
+$apiWaitSw = [System.Diagnostics.Stopwatch]::StartNew()
+while ($true) {
+    try {
+        $health = Invoke-ApiJson -Path "/v1/health" -Method "GET" -TimeoutSec 20
+        break
+    } catch {
+        $elapsed = [int]$apiWaitSw.Elapsed.TotalSeconds
+        if ($WaitForApiSec -le 0 -or $elapsed -ge $WaitForApiSec) {
+            Write-Host ""
+            Write-Host "Cannot reach the AcouLM HTTP API at: ${ApiBase}/v1/health" -ForegroundColor Red
+            Write-Host "  This script only drives an already-running API (it does not start the server)." -ForegroundColor Yellow
+            Write-Host "  Start the stack first, for example:  .\start_app.ps1" -ForegroundColor Yellow
+            Write-Host "  Then re-run this script, or wait for startup with:  -WaitForApiSec 120" -ForegroundColor Yellow
+            Write-Host "  If your API uses another URL, pass:  -ApiBase 'http://127.0.0.1:PORT'" -ForegroundColor Yellow
+            Write-Host ""
+            if ($WaitForApiSec -gt 0) {
+                throw "Timed out after ${WaitForApiSec}s waiting for API: $($_.Exception.Message)"
+            }
+            throw "API unreachable: $($_.Exception.Message)"
+        }
+        Write-Host "  API not ready yet (${elapsed}s / ${WaitForApiSec}s); retrying in 2s..." -ForegroundColor DarkYellow
+        Start-Sleep -Seconds 2
+    }
+}
 Write-Host ("Health: " + ($health | ConvertTo-Json -Compress))
 
 $prompt = "Write five concise bullet points about why local LLM inference can improve privacy."

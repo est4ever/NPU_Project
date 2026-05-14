@@ -185,7 +185,7 @@ To compare **AcouLM routing features on vs a simpler baseline** on your machine 
 
 Each run also writes **`bench_analysis_<timestamp>.json`**: Welch two-sample *t* on means, percentile **bootstrap 95% CI** for mean(enabled)−mean(baseline) per metric, pooled **Cohen’s d** (with sign oriented so positive means “enabled wins” on that metric), and optional **paired** wall-time stats when you use **`-PairedInterleaved`**. That switch runs the same prompt each round but alternates which scenario runs first, so each run index is a fair pair for thermal drift—recommended when you care whether a few-percent wall-time gap is real or noise.
 
-Requires the stack running (`.\start_app.ps1`) and the API reachable at `http://127.0.0.1:8000` (override with `-ApiBase`). NVIDIA VRAM is sampled only when `nvidia-smi` is available; Intel GPU/NPU paths typically leave VRAM blank in that script.
+Requires the stack running (`.\start_app.ps1`) and the API reachable at `http://127.0.0.1:8000` (override with `-ApiBase`). If the server is still starting, use **`-WaitForApiSec 120`** to poll `/v1/health` every 2 seconds for up to two minutes. NVIDIA VRAM is sampled only when `nvidia-smi` is available; Intel GPU/NPU paths typically leave VRAM blank in that script.
 
 **Browser control panel:** open the app shell → **Control** → **System & health** → **Feature compare (AcouLM vs baseline)** → **Run feature compare**. This uses the **paired interleaved** schedule, prints the statistical comparison table (Welch, bootstrap, Cohen *d*, paired wall row) after the averages, and restores your feature toggles afterward.
 
