@@ -4027,7 +4027,6 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     startTelemetryHeartbeat();
     void sendTelemetryEvent("app_start");
     bindGlobalShortcuts();
-    startConnectionPolling();
     startPerformancePolling();
     bootstrap()
       .then(() =>
@@ -4039,6 +4038,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         // bootstrap() already reported errors
       })
       .finally(() => {
+        startConnectionPolling();
         startCliEvents();
       });
   }
