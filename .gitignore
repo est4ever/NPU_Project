@@ -28,6 +28,10 @@ models/
 # NPU cache files
 npu_cache/
 
+# Marketing site (npm install / Vite); never commit dependencies
+site/node_modules/
+site/tsconfig.tsbuildinfo
+
 # OS / editor
 .vs/
 .vscode/
