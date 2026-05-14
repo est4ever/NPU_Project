@@ -34,10 +34,20 @@ jobs:
 
       - name: Install dependencies
         working-directory: site
-        run: npm install
+        env:
+          # GitHub sets CI=true; some npm versions pair that with omitting devDependencies.
+          # Vite, TypeScript, and @vitejs/plugin-react are devDependencies but required to build.
+          NODE_ENV: development
+        run: |
+          npm ci
+          test -d node_modules/react-router-dom
+          test -d node_modules/vite
+          test -d node_modules/typescript
 
       - name: Build site
         working-directory: site
+        env:
+          NODE_ENV: production
         run: npm run build
 
       - name: Upload artifact

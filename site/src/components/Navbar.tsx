@@ -24,7 +24,7 @@ export function Navbar() {
               <NavLink
                 to={item.to}
                 end={item.to === "/"}
-                className={({ isActive }) =>
+                className={({ isActive }: { isActive: boolean }) =>
                   isActive
                     ? "rounded-md border border-accent/70 bg-accent/10 px-3 py-1.5 text-accent"
                     : "rounded-md px-3 py-1.5 transition hover:text-accent"
