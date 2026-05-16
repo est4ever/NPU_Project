@@ -37,6 +37,8 @@ public:
 
     // Get current active device
     std::string get_active_device() const { return current_device; }
+
+    const std::string& get_model_path() const { return model_path; }
     
     // Get the active backend instance
     IBackend* get_active_backend() { return get_backend(current_device); }

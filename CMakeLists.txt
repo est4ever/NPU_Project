@@ -2,23 +2,28 @@ cmake_minimum_required(VERSION 3.18)
 project(NPU_Project LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MD")
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
-set(CMAKE_BUILD_TYPE Release)
+set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type")
 
-# Force Release configuration only
-set(CMAKE_CONFIGURATION_TYPES "Release" CACHE STRING "Supported build types" FORCE)
+if(MSVC)
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MD")
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+    set(CMAKE_CONFIGURATION_TYPES "Release" CACHE STRING "Supported build types" FORCE)
+endif()
 
-# Portable OpenVINO discovery order:
-# 1) OPENVINO_GENAI_DIR env var (root folder containing setupvars.bat)
-# 2) USERPROFILE/Downloads default paths
+# OpenVINO discovery: OPENVINO_GENAI_DIR or INTEL_OPENVINO_DIR (Linux modules often set the latter).
 if(NOT DEFINED OpenVINO_DIR)
     if(DEFINED ENV{OPENVINO_GENAI_DIR})
         set(OpenVINO_DIR "$ENV{OPENVINO_GENAI_DIR}/runtime/cmake")
-    elseif(EXISTS "$ENV{USERPROFILE}/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/cmake")
-        set(OpenVINO_DIR "$ENV{USERPROFILE}/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/cmake")
-    elseif(EXISTS "$ENV{USERPROFILE}/Downloads/openvino_genai_windows_2025.4.1.0_x86_64/runtime/cmake")
-        set(OpenVINO_DIR "$ENV{USERPROFILE}/Downloads/openvino_genai_windows_2025.4.1.0_x86_64/runtime/cmake")
+    elseif(DEFINED ENV{INTEL_OPENVINO_DIR})
+        set(OpenVINO_DIR "$ENV{INTEL_OPENVINO_DIR}/runtime/cmake")
+    elseif(WIN32 AND DEFINED ENV{USERPROFILE})
+        if(EXISTS "$ENV{USERPROFILE}/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/cmake")
+            set(OpenVINO_DIR "$ENV{USERPROFILE}/Downloads/openvino_genai_windows_2026.0.0.0_x86_64/runtime/cmake")
+        elseif(EXISTS "$ENV{USERPROFILE}/Downloads/openvino_genai_windows_2025.4.1.0_x86_64/runtime/cmake")
+            set(OpenVINO_DIR "$ENV{USERPROFILE}/Downloads/openvino_genai_windows_2025.4.1.0_x86_64/runtime/cmake")
+        endif()
+    elseif(UNIX AND EXISTS "/opt/intel/openvino/runtime/cmake")
+        set(OpenVINO_DIR "/opt/intel/openvino/runtime/cmake")
     endif()
 endif()
 
@@ -57,8 +62,10 @@ find_package(OpenVINOGenAI CONFIG REQUIRED)
 
 add_executable(npu_wrapper
     src/main.cpp
+    src/platform_util.cpp
     src/SpeculativeEngine.cpp
     src/RestAPIServer.cpp
+    src/InferenceRouting.cpp
     OpenVINO/Backend/OpenVINOBackend.cpp
     OpenVINO/Backend/BackendPool.cpp
     OpenVINO/Backend/KVCacheMonitor.cpp
@@ -73,5 +80,13 @@ target_link_libraries(npu_wrapper PRIVATE
     openvino::genai
     httplib::httplib
     nlohmann_json::nlohmann_json
-    psapi  # Windows Process Memory API
+)
+
+if(WIN32)
+    target_link_libraries(npu_wrapper PRIVATE psapi)
+endif()
+
+target_include_directories(npu_wrapper PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}
 )

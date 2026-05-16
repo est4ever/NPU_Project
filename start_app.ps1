@@ -17,19 +17,29 @@ param(
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptDir
+$deviceScript = Join-Path $scriptDir "scripts\AcouLM-Device.ps1"
+if (Test-Path -LiteralPath $deviceScript) {
+    . $deviceScript
+    Initialize-AcouLMDeviceEnvironment
+}
+if ([string]::IsNullOrWhiteSpace($env:ACOULM_HOME)) {
+    $env:ACOULM_HOME = $scriptDir
+}
 # acoulm.ps1 sets this so terminal-only launch cannot miss -SkipAppShell (profile/launcher edge cases).
 if ($env:ACOULM_TERMINAL_ONLY -eq "1") {
     $SkipAppShell = $true
 }
-$autoExportIr = $false
+$autoExportIr = $true
 if ($env:ACOULM_AUTO_EXPORT_IR -eq "0") { $autoExportIr = $false }
 if ($env:ACOULM_AUTO_EXPORT_IR -eq "1") { $autoExportIr = $true }
+if ($env:ACOULM_SNAPPY -eq "0") { $autoExportIr = $false }
 if ($NoAutoExportIr) { $autoExportIr = $false }
 if ($AutoExportIr) { $autoExportIr = $true }
 $autoSelectBestModel = $false
 $autoSelectModelEnv = [string]$env:ACOULM_AUTO_SELECT_MODEL
 $perfModeEnabled = $false
 if ($env:ACOULM_PERFORMANCE_MODE -eq "1") { $perfModeEnabled = $true }
+if ($env:ACOULM_SNAPPY -eq "1") { $perfModeEnabled = $true }
 if ($PerformanceMode) { $perfModeEnabled = $true }
 $perfProfileFile = Join-Path $scriptDir "registry\performance_profile.json"
 if ((-not $perfModeEnabled) -and (Test-Path -LiteralPath $perfProfileFile)) {
@@ -355,15 +365,18 @@ function Select-BestModelCandidate {
 
         $format = ([string]$m.Format).Trim().ToLower()
         $sizeMb = Get-PathSizeMB -FullPath $full
+        # Snappy policy: OpenVINO IR loads fast at any size; GGUF pays JIT compile cost (scales with size).
         $formatPriority = 5
-        if ($RegistryBackend.Type -eq "builtin") {
-            if ($format -eq "gguf") { $formatPriority = 0 }
-            elseif ($format -eq "openvino") { $formatPriority = 1 }
-        } else {
-            if ($format -eq "gguf") { $formatPriority = 0 }
-            elseif ($format -eq "openvino") { $formatPriority = 1 }
-            elseif ($format -eq "onnx") { $formatPriority = 2 }
-            elseif ($format -eq "safetensors" -or $format -eq "hf") { $formatPriority = 3 }
+        if (Test-DirHasOpenVINOIr -FullPath $full) {
+            $formatPriority = 0
+        } elseif ($format -eq "openvino") {
+            $formatPriority = 0
+        } elseif ($format -eq "gguf") {
+            $formatPriority = 1
+        } elseif ($format -eq "onnx") {
+            $formatPriority = 2
+        } elseif ($format -eq "safetensors" -or $format -eq "hf") {
+            $formatPriority = 3
         }
 
         $score = ($formatPriority * 100000.0) + $sizeMb
@@ -393,6 +406,7 @@ if ($null -ne $registryAutoSelectBestModel) {
 if ($autoSelectModelEnv -eq "1") { $autoSelectBestModel = $true }
 if ($autoSelectModelEnv -eq "0") { $autoSelectBestModel = $false }
 if ($AutoSelectBestModel) { $autoSelectBestModel = $true }
+if ($env:ACOULM_SNAPPY -eq "1" -and $autoSelectModelEnv -ne "0") { $autoSelectBestModel = $true }
 
 if ([string]::IsNullOrWhiteSpace($ModelPath)) {
     $ModelPath = $registryPick.Path
@@ -405,7 +419,7 @@ if ($autoSelectBestModel) {
     if ($best -and -not [string]::IsNullOrWhiteSpace($best.Path)) {
         if ($best.Path -ne $ModelPath) {
             Write-Host "[App] Auto-selected best model for this run: $($best.Id) ($($best.Path), format=$($best.Format), size=$($best.SizeMb) MB)." -ForegroundColor Cyan
-            Write-Host "      Heuristic favors lower-overhead formats and smaller model size for faster local compute." -ForegroundColor DarkGray
+            Write-Host "      Heuristic: OpenVINO IR first, then smallest GGUF (IR avoids per-launch compile)." -ForegroundColor DarkGray
         } else {
             Write-Host "[App] Auto-select checked registry models; keeping current model: $($best.Id)." -ForegroundColor DarkGray
         }
@@ -526,6 +540,26 @@ Docs: README sections 'What AcouLM Does Not Bundle' and 'Model Notes'.
 
 $ModelPath = Convert-FullPathToRepoRelativeModelArg -ProjectRoot $scriptDir -FullPath $backendFull
 
+$ensureFast = Join-Path $scriptDir "scripts\Ensure-FastModel.ps1"
+if (Test-Path -LiteralPath $ensureFast) {
+    try {
+        $fastRel = & $ensureFast -ProjectRoot $scriptDir
+        if (-not [string]::IsNullOrWhiteSpace($fastRel)) {
+            $pick = Get-RegistrySelectedModel
+            if ($pick.Path) {
+                $ModelPath = Normalize-ModelPathString $pick.Path
+                $bf2 = $null
+                $amb = $false
+                if (Try-ResolveRunnableModelBackendFull -RelPath $ModelPath -ProjectRoot $scriptDir -BackendFullOut ([ref]$bf2) -AmbiguousGgufOut ([ref]$amb)) {
+                    $backendFull = $bf2
+                }
+            }
+        }
+    } catch {
+        Write-Host "[App] Fast-model setup: $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
+}
+
 function Test-TcpPort {
     param(
         [string]$Hostname,
@@ -622,6 +656,93 @@ function Wait-AppShellTcpReady {
     return $false
 }
 
+function Get-ModelScaleProfile {
+    param([string]$BackendFullPath)
+    if ([string]::IsNullOrWhiteSpace($BackendFullPath) -or -not (Test-Path -LiteralPath $BackendFullPath)) {
+        return $null
+    }
+    $weightBytes = 0L
+    if (Test-Path -LiteralPath $BackendFullPath -PathType Leaf) {
+        $weightBytes = (Get-Item -LiteralPath $BackendFullPath).Length
+    } else {
+        foreach ($f in @(Get-ChildItem -LiteralPath $BackendFullPath -Recurse -File -ErrorAction SilentlyContinue)) {
+            if ($f.Name -match '\.(?i)(gguf|bin)$' -or $f.Extension -eq ".xml") {
+                $weightBytes += $f.Length
+            }
+        }
+    }
+    $weightGb = [math]::Round($weightBytes / 1GB, 2)
+    $isGguf = ($BackendFullPath -match '\.(?i)gguf$')
+    $isIr = (Test-Path -LiteralPath $BackendFullPath -PathType Container) -and (Test-DirHasOpenVINOIr -FullPath $BackendFullPath)
+    $tier = "small"
+    if ($weightGb -ge 8) { $tier = "xlarge" }
+    elseif ($weightGb -ge 4) { $tier = "large" }
+    elseif ($weightGb -ge 2) { $tier = "medium" }
+    $estRamGb = [math]::Round($weightGb * 1.35 + 2.5, 1)
+    $coldNote = if ($isIr) {
+        "IR: load is usually seconds (size scales mainly with RAM)."
+    } elseif ($isGguf) {
+        "GGUF: first compile scales with size and GPU strength (~1-5 min at 2GB on weak iGPU; IR is much faster after one export)."
+    } else {
+        "Cold load time depends on format and device."
+    }
+    return [pscustomobject]@{
+        WeightGb   = $weightGb
+        Tier       = $tier
+        EstRamGb   = $estRamGb
+        IsGguf     = $isGguf
+        IsIr       = $isIr
+        ColdNote   = $coldNote
+    }
+}
+
+function Show-ModelScaleWarning {
+    param([string]$BackendFullPath)
+    $p = Get-ModelScaleProfile -BackendFullPath $BackendFullPath
+    if (-not $p) { return }
+    Write-Host "[App] Model weights ~$($p.WeightGb) GB (tier $($p.Tier)); est. peak RAM ~$($p.EstRamGb) GB." -ForegroundColor Cyan
+    Write-Host "[App] $($p.ColdNote)" -ForegroundColor DarkGray
+    if ($p.IsGguf -and $p.WeightGb -ge 2) {
+        Write-Host "[App] For daily speed at this size or larger, export OpenVINO IR once (see Export-HfFolderToOpenVinoIR.ps1) or use a smaller GGUF." -ForegroundColor DarkYellow
+    }
+    if ($p.Tier -eq "large" -or $p.Tier -eq "xlarge") {
+        Write-Host "[App] Large model: single-device only; do not enable split-prefill or multi-device load." -ForegroundColor Yellow
+    }
+}
+
+function Get-SystemRamGb {
+    try {
+        $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+        return [math]::Round($cs.TotalPhysicalMemory / 1GB, 1)
+    } catch {
+        return 32.0
+    }
+}
+
+function Test-IsHardwareDevice {
+    param([string]$Value)
+    return -not [string]::IsNullOrWhiteSpace($Value) -and $Value.Trim().ToUpperInvariant() -match '^(CPU|GPU|NPU)$'
+}
+
+function Resolve-BackendDeviceOverride {
+    param(
+        [string]$UserDevice,
+        [string]$ModelFullPath
+    )
+    if (Test-IsHardwareDevice -Value $UserDevice) {
+        return $UserDevice.Trim().ToUpperInvariant()
+    }
+    $fromEnv = [string]$env:ACOULM_DEVICE
+    if (Test-IsHardwareDevice -Value $fromEnv) {
+        return $fromEnv.Trim().ToUpperInvariant()
+    }
+    return ""
+}
+
+function Test-BackendProcessRunning {
+    return $null -ne (Get-Process -Name "npu_wrapper" -ErrorAction SilentlyContinue | Select-Object -First 1)
+}
+
 function Stop-BackendServer {
     Get-Process npu_wrapper -ErrorAction SilentlyContinue |
         ForEach-Object {
@@ -638,9 +759,9 @@ function Start-BackendServer {
         [string[]]$Args
     )
 
-    $runScript = Join-Path $scriptDir "run.ps1"
-    if (-not (Test-Path $runScript)) {
-        throw "[App] Missing run script: $runScript"
+    $hostScript = Join-Path $scriptDir "scripts\Start-AcouLMBackend.ps1"
+    if (-not (Test-Path -LiteralPath $hostScript)) {
+        throw "[App] Missing backend host script: $hostScript"
     }
 
     $effectiveArgs = @()
@@ -652,36 +773,54 @@ function Start-BackendServer {
         if (-not $hasPolicyArg) {
             $effectiveArgs += @("--policy", "PERFORMANCE")
         }
-        $effectiveArgs += @("--context-routing", "--split-prefill")
     }
-    $effectiveArgs += @($Args)
-
-    $escapedBackendArgs = @()
-    foreach ($arg in $effectiveArgs) {
-        if ($null -eq $arg -or $arg -eq "") { continue }
-        $escaped = $arg.Replace('"', '`"')
-        if ($escaped -match '\s') {
-            $escapedBackendArgs += '"' + $escaped + '"'
-        } else {
-            $escapedBackendArgs += $escaped
-        }
+    if ($Args) {
+        $effectiveArgs += @($Args)
     }
 
-    $backendCmd = "Set-Location '$scriptDir'; & '$runScript' '$Model' --server --port $Port"
-    if ($DeviceOverride -and $DeviceOverride -ne "") {
-        $backendCmd += " --device $DeviceOverride"
+    $psArgs = @(
+        "-NoExit",
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", $hostScript,
+        "-Model", $Model,
+        "-Port", $Port
+    )
+    if (Test-IsHardwareDevice -Value $DeviceOverride) {
+        $psArgs += @("-Device", $DeviceOverride.Trim().ToUpperInvariant())
+    } elseif (-not [string]::IsNullOrWhiteSpace($DeviceOverride)) {
+        Write-Host "[App] Ignoring invalid -Device '$DeviceOverride' (use CPU, GPU, or NPU)." -ForegroundColor Yellow
     }
-    if ($escapedBackendArgs.Count -gt 0) {
-        $backendCmd += " " + ($escapedBackendArgs -join " ")
+    if ($effectiveArgs.Count -gt 0) {
+        $psArgs += @("-ExtraArgs")
+        $psArgs += $effectiveArgs
     }
 
     $windowStyle = if ($HideWindow) { "Hidden" } else { "Normal" }
-    $backendArgs = if ($HideWindow) {
-        @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $backendCmd)
-    } else {
-        @("-NoExit", "-Command", $backendCmd)
+    Start-Process -FilePath "powershell" -ArgumentList $psArgs -WindowStyle $windowStyle | Out-Null
+}
+
+function Test-ApiHttpHealthy {
+    param([int]$Port)
+    try {
+        $null = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/v1/health" -Method Get -TimeoutSec 2 -ErrorAction Stop
+        return $true
+    } catch {
+        return $false
     }
-    Start-Process powershell -ArgumentList $backendArgs -WindowStyle $windowStyle | Out-Null
+}
+
+function Test-ApiChatReady {
+    param([int]$Port)
+    try {
+        $h = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/v1/health" -Method Get -TimeoutSec 3 -ErrorAction Stop
+        if ($null -ne $h.chat_ready -and $h.chat_ready -eq $false) {
+            return $false
+        }
+        return $true
+    } catch {
+        return $false
+    }
 }
 
 function Wait-ForApiReady {
@@ -695,18 +834,26 @@ function Wait-ForApiReady {
     while ((Get-Date) -lt $deadline) {
         # TCP-listening is not enough; the backend can bind the port while still loading weights.
         # Require an actual HTTP response from /v1/health.
+        if (Test-ApiChatReady -Port $Port) {
+            return $true
+        }
         if (Test-TcpPort -Hostname "127.0.0.1" -Port $Port -TimeoutMs 250) {
             try {
-                $null = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/v1/health" -Method Get -TimeoutSec 2 -ErrorAction Stop
-                return $true
+                $h = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/v1/health" -Method Get -TimeoutSec 2 -ErrorAction Stop
+                if ($null -ne $h.chat_ready -and $h.chat_ready -eq $false) {
+                    $elapsed = ((Get-Date) - $lastProgress).TotalSeconds
+                    if ($elapsed -ge 12) {
+                        Write-Host "[App] API online - loading model (first compile may take several minutes)..." -ForegroundColor DarkYellow
+                        $lastProgress = Get-Date
+                    }
+                }
             } catch {
                 # keep waiting
             }
         }
         $elapsed = ((Get-Date) - $lastProgress).TotalSeconds
         if ($elapsed -ge 15) {
-            $remain = [math]::Max(0, [int]($deadline - (Get-Date)).TotalSeconds)
-            Write-Host "[App] Still waiting for backend (model load / compile) - ~${remain}s left before timeout..." -ForegroundColor DarkYellow
+            Write-Host "[App] Still waiting for model to finish loading..." -ForegroundColor DarkYellow
             $lastProgress = Get-Date
         }
         Start-Sleep -Milliseconds 500
@@ -718,7 +865,7 @@ Write-Host "[App] Project root: $scriptDir" -ForegroundColor Cyan
 Write-Host "[App] Starting AcouLM (control panel + API; OpenWebUI disabled)..." -ForegroundColor Cyan
 Write-Host "[App] Selected backend type: $($registryBackend.Type)" -ForegroundColor DarkGray
 if ($perfModeEnabled) {
-    Write-Host "[App] Performance mode enabled (PERFORMANCE policy + context-routing + split-prefill defaults)." -ForegroundColor Green
+    Write-Host "[App] Performance mode enabled (PERFORMANCE policy; single device, low-latency hints)." -ForegroundColor Green
 }
 
 $appUrl = "http://localhost:$AppPort"
@@ -726,16 +873,47 @@ $apiBase = "http://localhost:$ApiPort/v1"
 $appReady = $false
 $didOpenBrowser = $false
 
-Write-Host "[App] Stopping stale backend/app shell processes..." -ForegroundColor Yellow
-Stop-BackendServer
-Stop-AppShellServer -Port $AppPort
+if (Test-ApiChatReady -Port $ApiPort) {
+    Write-Host "[App] API already healthy on port $ApiPort - skipping backend restart." -ForegroundColor Green
+    if ($SkipAppShell) {
+        Write-Host "[App] Ready (API only)." -ForegroundColor Green
+        exit 0
+    }
+    if (-not (Test-TcpPort -Hostname "127.0.0.1" -Port $AppPort -TimeoutMs 400)) {
+        Start-AppShellHttpProcess
+        $null = Wait-AppShellTcpReady -TimeoutSec 10
+    }
+    if ($OpenBrowser) {
+        if (Open-Url -Url $appUrl) {
+            Write-Host "[App] Opened browser (control panel)." -ForegroundColor Green
+        }
+    }
+    Write-Host "`n[App] Ready." -ForegroundColor Green
+    Write-Host "Primary UI (App Shell): $appUrl"
+    exit 0
+}
+
+$portBusy = Test-TcpPort -Hostname "127.0.0.1" -Port $ApiPort -TimeoutMs 400
+$backendRunning = Test-BackendProcessRunning
+if ($backendRunning -or $portBusy) {
+    if (-not (Test-ApiChatReady -Port $ApiPort)) {
+        Write-Host "[App] Backend already running on port $ApiPort (waiting for model, not restarting)." -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "[App] No backend process - starting fresh." -ForegroundColor Yellow
+    Stop-BackendServer
+}
+if (-not $SkipAppShell) {
+    Write-Host "[App] Stopping stale control panel processes..." -ForegroundColor Yellow
+    Stop-AppShellServer -Port $AppPort
+}
 
 # Start static UI first so the browser can open while the model loads (API may show offline briefly).
 if (-not $SkipAppShell) {
     Write-Host "[App] Starting control panel on port $AppPort (before API - you can open the browser now)..." -ForegroundColor Cyan
     Write-Host "[App] The page may show API offline until the backend finishes loading weights." -ForegroundColor DarkGray
     Start-AppShellHttpProcess
-    $appReady = Wait-AppShellTcpReady -TimeoutSec 30
+    $appReady = Wait-AppShellTcpReady -TimeoutSec 10
     if ($appReady) {
         Write-Host "[App] Control panel is listening at $appUrl" -ForegroundColor Green
     } else {
@@ -753,14 +931,19 @@ if (-not $SkipAppShell) {
     }
 }
 
-Write-Host "[App] Launching backend. First load can take 1-5 min (GGUF/IR compile)." -ForegroundColor DarkCyan
-if ($HideServiceWindows) {
-    Write-Host "[App] Service windows are hidden — use Task Manager for npu_wrapper.exe if you need a process view." -ForegroundColor DarkYellow
-} else {
-    Write-Host "[App] A visible PowerShell window will show backend (run.ps1) output." -ForegroundColor DarkGray
+if (-not $backendRunning -and -not $portBusy) {
+    if ($backendFull) {
+        Show-ModelScaleWarning -BackendFullPath $backendFull
+    }
+    Write-Host "[App] Launching backend." -ForegroundColor DarkCyan
+    if ($HideServiceWindows) {
+        Write-Host "[App] Service windows are hidden - use Task Manager for npu_wrapper.exe if you need a process view." -ForegroundColor DarkYellow
+    } else {
+        Write-Host "[App] A visible PowerShell window will show backend (run.ps1) output." -ForegroundColor DarkGray
+    }
+    $loadDevice = Resolve-BackendDeviceOverride -UserDevice $Device -ModelFullPath $backendFull
+    Start-BackendServer -Model $ModelPath -DeviceOverride $loadDevice -Port $ApiPort -HideWindow:$HideServiceWindows -Args $BackendArgs
 }
-
-Start-BackendServer -Model $ModelPath -DeviceOverride $Device -Port $ApiPort -HideWindow:$HideServiceWindows -Args $BackendArgs
 
 if (Wait-ForApiReady -Port $ApiPort -TimeoutSec $TimeoutSeconds) {
     Write-Host "[App] Backend API is ready at http://localhost:$ApiPort/v1" -ForegroundColor Green
@@ -775,7 +958,7 @@ if ($SkipAppShell) {
     if (-not $appReady) {
         Write-Host "[App] Retrying control panel after API start..." -ForegroundColor Yellow
         Start-AppShellHttpProcess
-        $appReady = Wait-AppShellTcpReady -TimeoutSec 30
+        $appReady = Wait-AppShellTcpReady -TimeoutSec 10
         if ($appReady) {
             Write-Host "[App] Control panel is up: $appUrl" -ForegroundColor Green
         } else {

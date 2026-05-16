@@ -2,6 +2,7 @@
 #include "IBackend.h"
 #include <openvino/genai/llm_pipeline.hpp>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 class OpenVINOBackend : public IBackend {
@@ -13,6 +14,8 @@ private:
     std::optional<int64_t> last_generated_tokens;
     TokenCountSource last_prompt_tokens_source = TokenCountSource::Unknown;
     TokenCountSource last_generated_tokens_source = TokenCountSource::Unknown;
+    // OpenVINO continuous batching allows only one in-flight generate() per pipeline.
+    mutable std::mutex inference_mutex_;
 
 public:
     OpenVINOBackend() = default;

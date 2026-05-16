@@ -1,0 +1,5 @@
+{
+  "performance_profile": "latency-first",
+  "performance_reason": "hpc-default",
+  "policy": "PERFORMANCE"
+}

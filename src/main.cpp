@@ -1,9 +1,9 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <windows.h>
 
 #include "../OpenVINO/Backend/BackendPool.h"
+#include "platform_util.h"
 #include "../OpenVINO/Backend/IBackend.h"
 #include "../OpenVINO/Backend/KVCacheMonitor.h"
 #include "../OpenVINO/Scheduler/OpenVINOScheduler.h"
@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cmath>
 #include <thread>
+#include <functional>
 
 // Static initialization debug - writes to file before main() is called
 namespace {
@@ -43,14 +44,123 @@ static void logline(const std::string& s) {
     f << s << std::endl;
 }
 
-// One tiny generation before HTTP listen so the first user chat is less likely to pay full JIT/graph cost.
-// Opt out: set env ACOULM_SKIP_STARTUP_WARMUP=1
+static void maybe_startup_server_warmup(BackendPool& pool, bool speculative_mode);
+static void mark_backend_hot();
+static void log_model_scale_hint(const std::string& model_path);
+
+// Start HTTP first so /v1/health responds while weights compile (chat_ready stays false until load finishes).
+static bool start_server_then_load(
+    BackendPool& pool,
+    RuntimeConfig& server_config,
+    KVCacheMonitor& kv_monitor,
+    OpenVINOScheduler& scheduler,
+    int server_port,
+    int argc,
+    char** argv,
+    bool speculative_mode,
+    const std::function<void()>& load_models
+) {
+    save_npu_launch_state(argc, argv);
+    RestAPIServer api_server(&pool, &server_config, &kv_monitor, &scheduler, server_port);
+
+    std::thread server_thread([&api_server]() {
+        try {
+            api_server.start();
+        } catch (const std::exception& e) {
+            std::cerr << "[Thread] Server thread exception: " << e.what() << "\n";
+            std::cerr.flush();
+        } catch (...) {
+            std::cerr << "[Thread] Server thread unknown exception\n";
+            std::cerr.flush();
+        }
+    });
+
+    if (!api_server.wait_until_listening(120000)) {
+        std::cerr << "[Server Mode] API did not bind to port " << server_port << " in time.\n";
+        api_server.stop();
+        if (server_thread.joinable()) {
+            server_thread.join();
+        }
+        return false;
+    }
+
+    std::cout << "[Server Mode] API listening on port " << server_port
+              << " (model loading - /v1/health chat_ready=false until done)\n"
+              << std::flush;
+
+    load_models();
+    mark_backend_hot();
+
+    maybe_startup_server_warmup(pool, speculative_mode);
+
+    std::cout << "\n[Server Mode] Server running. Press Ctrl+C to stop.\n";
+    std::cout << "[Server Mode] Test with: curl -X POST http://localhost:" << server_port << "/v1/chat/completions \\\n";
+    std::cout << "  -H \"Content-Type: application/json\" \\\n";
+    std::cout << "  -d '{\"model\":\"openvino\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello!\"}]}'\n\n";
+    std::cout.flush();
+
+    if (server_thread.joinable()) {
+        server_thread.join();
+    }
+    return true;
+}
+
+static void log_model_scale_hint(const std::string& model_path) {
+    if (model_path.empty()) {
+        return;
+    }
+    try {
+        namespace fs = std::filesystem;
+        int64_t bytes = 0;
+        bool is_gguf = false;
+        if (fs::is_regular_file(model_path)) {
+            bytes = static_cast<int64_t>(fs::file_size(model_path));
+            is_gguf = model_path.size() >= 5 &&
+                      model_path.compare(model_path.size() - 5, 5, ".gguf") == 0;
+        } else if (fs::is_directory(model_path)) {
+            for (const auto& entry : fs::recursive_directory_iterator(
+                     model_path, fs::directory_options::skip_permission_denied)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".gguf") {
+                    bytes += static_cast<int64_t>(entry.file_size());
+                    is_gguf = true;
+                }
+            }
+        }
+        const double gb = static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0);
+        std::cout << "[Server Mode] Model weights ~" << gb << " GB";
+        if (is_gguf) {
+            std::cout << " (GGUF: first compile scales with size; IR or hot backend is much faster)";
+        }
+        std::cout << "\n" << std::flush;
+    } catch (...) {
+    }
+}
+
+static void mark_backend_hot() {
+    const char* home = std::getenv("ACOULM_HOME");
+    if (!home || !home[0]) {
+        return;
+    }
+    try {
+        const auto path = std::filesystem::path(home) / "registry" / "backend_hot.json";
+        std::filesystem::create_directories(path.parent_path());
+        const auto now = std::chrono::system_clock::now();
+        const auto epoch = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+        std::ofstream out(path, std::ios::trunc);
+        if (out.is_open()) {
+            out << "{\"chat_ready\":true,\"epoch\":" << epoch << "}\n";
+        }
+    } catch (...) {
+    }
+}
+
+// Optional tiny generation after model load (adds startup delay). Enable: ACOULM_STARTUP_WARMUP=1
 static void maybe_startup_server_warmup(BackendPool& pool, bool speculative_mode) {
     if (speculative_mode) {
         return;
     }
-    const char* skip = std::getenv("ACOULM_SKIP_STARTUP_WARMUP");
-    if (skip && skip[0] == '1' && skip[1] == '\0') {
+    const char* enable = std::getenv("ACOULM_STARTUP_WARMUP");
+    if (!enable || enable[0] != '1') {
         return;
     }
     IBackend* backend = pool.get_active_backend();
@@ -151,6 +261,38 @@ static EnginePolicy parse_policy_arg(int argc, char** argv) {
     return EnginePolicy::BATTERY_SAVER; // Default to battery saver (NPU-first)
 }
 
+static bool is_hardware_device(const std::string& device) {
+    return device == "CPU" || device == "GPU" || device == "NPU";
+}
+
+static bool is_policy_name(const std::string& token) {
+    return token == "PERFORMANCE" || token == "BATTERY_SAVER" || token == "BALANCED";
+}
+
+static void normalize_device_override(std::string& device_override, EnginePolicy& policy) {
+    if (device_override.empty()) {
+        return;
+    }
+    if (is_policy_name(device_override)) {
+        if (device_override == "PERFORMANCE") {
+            policy = EnginePolicy::PERFORMANCE;
+        } else if (device_override == "BATTERY_SAVER") {
+            policy = EnginePolicy::BATTERY_SAVER;
+        } else {
+            policy = EnginePolicy::BALANCED;
+        }
+        std::cout << "[AcouLM] --device " << device_override
+                  << " is a policy name; using --policy instead.\n" << std::flush;
+        device_override.clear();
+        return;
+    }
+    if (!is_hardware_device(device_override) && device_override.rfind("AUTO:", 0) != 0) {
+        std::cerr << "[AcouLM] Invalid --device '" << device_override
+                  << "' (use CPU|GPU|NPU); ignoring override.\n";
+        device_override.clear();
+    }
+}
+
 static bool parse_device_override(int argc, char** argv, std::string& out) {
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
@@ -170,6 +312,25 @@ static bool parse_device_override(int argc, char** argv, std::string& out) {
     }
     out.clear();
     return false;
+}
+
+static void load_pool_with_cpu_fallback(
+    BackendPool& pool,
+    const std::string& model_dir,
+    const std::string& primary_device
+) {
+    try {
+        pool.load_on_devices(model_dir, {primary_device});
+        pool.set_active_device(primary_device);
+    } catch (const std::exception& e) {
+        if (primary_device == "CPU") {
+            throw;
+        }
+        std::cerr << "[Server Mode] Load on " << primary_device << " failed: " << e.what() << "\n";
+        std::cout << "[Server Mode] Retrying on CPU...\n" << std::flush;
+        pool.load_on_devices(model_dir, {"CPU"});
+        pool.set_active_device("CPU");
+    }
 }
 
 static bool has_benchmark_flag(int argc, char** argv) {
@@ -372,7 +533,7 @@ static bool is_device_available(const std::vector<std::string>& available, const
 
 static std::string profile_for_policy(EnginePolicy policy) {
     switch (policy) {
-        case EnginePolicy::PERFORMANCE: return "balanced-performance";
+        case EnginePolicy::PERFORMANCE: return "latency-first";
         case EnginePolicy::BATTERY_SAVER: return "latency-first";
         case EnginePolicy::BALANCED:
         default: return "default";
@@ -742,7 +903,7 @@ int main(int argc, char** argv) {
     std::cout << "Policy: " << (policy == EnginePolicy::PERFORMANCE ? "PERFORMANCE" : 
                                    policy == EnginePolicy::BATTERY_SAVER ? "BATTERY_SAVER" : "BALANCED") << "\n" << std::flush;
     logline("Policy: ");
-    _putenv_s("ACOULM_PERF_MODE", profile_for_policy(policy).c_str());
+    acoulm::set_env_var("ACOULM_PERF_MODE", profile_for_policy(policy));
     
     // Check for benchmark mode
     bool benchmark_mode = has_benchmark_flag(argc, argv);
@@ -768,7 +929,8 @@ int main(int argc, char** argv) {
         std::cerr << "Error: --device requires a value (CPU|GPU|NPU)\n";
         return 1;
     }
-    
+    normalize_device_override(device_override, policy);
+
     // Check for server mode
     bool server_mode = has_server_flag(argc, argv);
     int server_port = parse_server_port(argc, argv);
@@ -921,8 +1083,7 @@ int main(int argc, char** argv) {
             bool use_prefill_device = false;
             std::vector<std::string> loaded_devices;
 
-            if (!speculative_mode) {
-                // Load model on all tested devices
+            if (!speculative_mode && !server_mode) {
                 pool.load_on_devices(model_dir, devices_to_test);
                 pool.set_active_device(best_device);
                 loaded_devices = pool.get_loaded_devices();
@@ -935,7 +1096,7 @@ int main(int argc, char** argv) {
                               << ", Threshold: " << prefill_threshold_high
                               << " (low: " << prefill_threshold_low << ") tokens\n";
                 }
-            } else {
+            } else if (speculative_mode) {
                 std::cout << "[Speculative] Draft model: " << draft_model_dir << "\n";
                 std::cout << "[Speculative] Draft device: " << draft_device
                           << ", Verify device: " << verify_device << "\n";
@@ -943,10 +1104,8 @@ int main(int argc, char** argv) {
                 spec_ready = true;
             }
             
-            // SERVER MODE: Start REST API server instead of interactive loop
             if (server_mode) {
                 std::cout << "\n[Server Mode] Starting OpenAI-compatible REST API server...\n";
-                std::cout << "[Server Mode] Backend: " << pool.get_active_device() << "\n";
                 if (context_routing) {
                     std::cout << "[Server Mode] Context-aware routing: ENABLED\n";
                 }
@@ -958,38 +1117,48 @@ int main(int argc, char** argv) {
                 server_config.set_policy(policy);
                 server_config.set_performance_profile(profile_for_policy(policy), "policy-selected");
                 server_config.set_json_mode(json_mode);
+                {
+                    const char* snappy = std::getenv("ACOULM_SNAPPY");
+                    if (!snappy || snappy[0] != '0') {
+                        split_prefill = false;
+                        context_routing = false;
+                    }
+                }
                 server_config.set_split_prefill(split_prefill);
                 server_config.set_context_routing(context_routing);
                 server_config.set_enable_kv_paging(enable_kv_paging);
                 server_config.set_prefill_threshold_high(prefill_threshold_high);
 
-                maybe_startup_server_warmup(pool, speculative_mode);
-                save_npu_launch_state(argc, argv);
-                RestAPIServer api_server(&pool, &server_config, &kv_monitor, server_port);
-                
-                // Start server in a separate thread with exception handling
-                std::thread server_thread([&api_server]() {
-                    try {
-                        api_server.start();
-                    } catch (const std::exception& e) {
-                        std::cerr << "[Thread] Server thread exception: " << e.what() << "\n";
-                        std::cerr.flush();
-                    } catch (...) {
-                        std::cerr << "[Thread] Server thread unknown exception\n";
-                        std::cerr.flush();
+                auto load_models = [&]() {
+                    if (speculative_mode) {
+                        return;
                     }
-                });
-                
-                std::cout << "\n[Server Mode] Server running. Press Ctrl+C to stop.\n";
-                std::cout << "[Server Mode] Test with: curl -X POST http://localhost:" << server_port << "/v1/chat/completions \\\n";
-                std::cout << "  -H \"Content-Type: application/json\" \\\n";
-                std::cout << "  -d '{\"model\":\"openvino\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello!\"}]}'\n\n";
-                std::cout.flush();
-                
-                // Wait for server thread
-                server_thread.join();
-                
-                // Clean up and exit
+                    pool.load_on_devices(model_dir, devices_to_test);
+                    pool.set_active_device(best_device);
+                    loaded_devices = pool.get_loaded_devices();
+                    std::cout << "[Server Mode] Backend: " << pool.get_active_device() << "\n";
+                    if (split_prefill) {
+                        ttft_device = select_best_ttft_device(benchmarks, loaded_devices, best_device);
+                        throughput_device = select_best_throughput_device(benchmarks, loaded_devices, best_device);
+                        std::cout << "[Split] TTFT device: " << ttft_device
+                                  << ", Throughput device: " << throughput_device
+                                  << ", Threshold: " << prefill_threshold_high
+                                  << " (low: " << prefill_threshold_low << ") tokens\n";
+                    }
+                };
+
+                if (!start_server_then_load(
+                        pool,
+                        server_config,
+                        kv_monitor,
+                        scheduler,
+                        server_port,
+                        argc,
+                        argv,
+                        speculative_mode,
+                        load_models)) {
+                    return 1;
+                }
                 logline("=== SERVER MODE END ===");
                 return 0;
             }
@@ -1182,7 +1351,7 @@ int main(int argc, char** argv) {
             
             // Use BackendPool for single-device mode (maintains abstraction layer)
             BackendPool pool;
-            if (!speculative_mode) {
+            if (!speculative_mode && !server_mode) {
                 if (split_prefill) {
                     available_devices = scheduler.discover_devices();
                     prefill_device = is_device_available(available_devices, "GPU") ? "GPU" :
@@ -1202,38 +1371,14 @@ int main(int argc, char** argv) {
                               << ", Throughput device: " << decode_device
                               << ", Threshold: " << prefill_threshold_high
                               << " (low: " << prefill_threshold_low << ") tokens\n";
-                } else if (server_mode) {
-                    // In server mode, load only the primary device by default for faster startup.
-                    // Use --preload-all-devices to load on all available devices for instant switching.
-                    std::vector<std::string> devices_to_load;
-                    if (preload_all_devices) {
-                        // Load on all hardware devices (legacy behavior)
-                        std::vector<std::string> all_hw;
-                        for (const auto& d : scheduler.discover_devices()) {
-                            if (d == "CPU" || d == "GPU" || d == "NPU") all_hw.push_back(d);
-                        }
-                        if (all_hw.empty()) all_hw.push_back(device);
-                        devices_to_load = all_hw;
-                        std::cout << "[Server Mode] Preloading on all devices (use --preload-all-devices=false for faster startup)\n";
-                    } else {
-                        // Load only on primary device (new default behavior)
-                        devices_to_load = {device};
-                        std::cout << "[Server Mode] Loading on primary device only (use --preload-all-devices for all devices)\n";
-                    }
-                    pool.load_on_devices(model_dir, devices_to_load);
-                    pool.set_active_device(device);
-                    std::cout << "[Server Mode] Loaded " << pool.get_loaded_devices().size()
-                              << " device(s). Active: " << pool.get_active_device() << "\n" << std::flush;
                 } else {
                     pool.load_on_devices(model_dir, {device});
                     pool.set_active_device(device);
                 }
             }
 
-            // SERVER MODE: Start REST API server instead of interactive loop
             if (server_mode) {
                 std::cout << "\n[Server Mode] Starting OpenAI-compatible REST API server...\n";
-                std::cout << "[Server Mode] Backend: " << pool.get_active_device() << "\n";
                 if (context_routing) {
                     std::cout << "[Server Mode] Context-aware routing: ENABLED\n";
                 }
@@ -1245,6 +1390,13 @@ int main(int argc, char** argv) {
                 server_config.set_policy(policy);
                 server_config.set_performance_profile(profile_for_policy(policy), "policy-selected");
                 server_config.set_json_mode(json_mode);
+                {
+                    const char* snappy = std::getenv("ACOULM_SNAPPY");
+                    if (!snappy || snappy[0] != '0') {
+                        split_prefill = false;
+                        context_routing = false;
+                    }
+                }
                 server_config.set_split_prefill(split_prefill);
                 server_config.set_context_routing(context_routing);
                 server_config.set_enable_kv_paging(enable_kv_paging);
@@ -1252,33 +1404,75 @@ int main(int argc, char** argv) {
                 server_config.prefill_device = prefill_device;
                 server_config.decode_device = decode_device;
 
-                maybe_startup_server_warmup(pool, speculative_mode);
-                save_npu_launch_state(argc, argv);
-                RestAPIServer api_server(&pool, &server_config, &kv_monitor, server_port);
-                
-                // Start server in a separate thread with exception handling
-                std::thread server_thread([&api_server]() {
-                    try {
-                        api_server.start();
-                    } catch (const std::exception& e) {
-                        std::cerr << "[Thread] Server thread exception: " << e.what() << "\n";
-                        std::cerr.flush();
-                    } catch (...) {
-                        std::cerr << "[Thread] Server thread unknown exception\n";
-                        std::cerr.flush();
+                auto load_models = [&]() {
+                    if (speculative_mode) {
+                        return;
                     }
-                });
-                
-                std::cout << "\n[Server Mode] Server running. Press Ctrl+C to stop.\n";
-                std::cout << "[Server Mode] Test with: curl -X POST http://localhost:" << server_port << "/v1/chat/completions \\\n";
-                std::cout << "  -H \"Content-Type: application/json\" \\\n";
-                std::cout << "  -d '{\"model\":\"openvino\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello!\"}]}'\n\n";
-                std::cout.flush();
-                
-                // Wait for server thread
-                server_thread.join();
-                
-                // Clean up and exit
+                    log_model_scale_hint(model_dir);
+                    if (split_prefill) {
+                        available_devices = scheduler.discover_devices();
+                        prefill_device = is_device_available(available_devices, "GPU") ? "GPU" :
+                            (is_device_available(available_devices, "CPU") ? "CPU" : "NPU");
+                        decode_device = is_device_available(available_devices, "NPU") ? "NPU" :
+                            (is_device_available(available_devices, "GPU") ? "GPU" : "CPU");
+
+                        std::vector<std::string> devices_to_load;
+                        devices_to_load.push_back(prefill_device);
+                        if (decode_device != prefill_device) {
+                            devices_to_load.push_back(decode_device);
+                        }
+                        std::cout << "[Server Mode] Loading model for split-prefill on "
+                                  << devices_to_load.size() << " device(s)...\n" << std::flush;
+                        pool.load_on_devices(model_dir, devices_to_load);
+                        pool.set_active_device(decode_device);
+                        server_config.prefill_device = prefill_device;
+                        server_config.decode_device = decode_device;
+
+                        std::cout << "[Split] TTFT device: " << prefill_device
+                                  << ", Throughput device: " << decode_device
+                                  << ", Threshold: " << prefill_threshold_high
+                                  << " (low: " << prefill_threshold_low << ") tokens\n";
+                    } else {
+                        std::vector<std::string> devices_to_load;
+                        if (preload_all_devices) {
+                            std::vector<std::string> all_hw;
+                            for (const auto& d : scheduler.discover_devices()) {
+                                if (d == "CPU" || d == "GPU" || d == "NPU") {
+                                    all_hw.push_back(d);
+                                }
+                            }
+                            if (all_hw.empty()) {
+                                all_hw.push_back(device);
+                            }
+                            devices_to_load = all_hw;
+                            std::cout << "[Server Mode] Preloading on all devices...\n";
+                        } else {
+                            devices_to_load = {device};
+                            std::cout << "[Server Mode] Loading model on " << device << "...\n" << std::flush;
+                        }
+                        if (devices_to_load.size() == 1) {
+                            load_pool_with_cpu_fallback(pool, model_dir, devices_to_load[0]);
+                        } else {
+                            pool.load_on_devices(model_dir, devices_to_load);
+                            pool.set_active_device(device);
+                        }
+                    }
+                    std::cout << "[Server Mode] Loaded " << pool.get_loaded_devices().size()
+                              << " device(s). Active: " << pool.get_active_device() << "\n" << std::flush;
+                };
+
+                if (!start_server_then_load(
+                        pool,
+                        server_config,
+                        kv_monitor,
+                        scheduler,
+                        server_port,
+                        argc,
+                        argv,
+                        speculative_mode,
+                        load_models)) {
+                    return 1;
+                }
                 logline("=== SERVER MODE END ===");
                 return 0;
             }

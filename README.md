@@ -10,6 +10,23 @@ AcouLM is a local AI control plane for Windows:
 
 You can run AcouLM with the built-in OpenVINO backend (`npu_wrapper`) or an external backend that supports the same API.
 
+## Supercomputer (Linux) — quick start
+
+After `git push`, on the cluster:
+
+```bash
+git clone https://github.com/YOUR_USER/AcouLM.git && cd AcouLM
+./hpc-setup.sh
+cp scripts/hpc/local_env.example.sh scripts/hpc/local_env.sh   # edit OPENVINO_GENAI_DIR + ACOULM_MODEL
+source scripts/hpc/setup_env.sh
+./build.sh
+sbatch scripts/hpc/slurm_acoulm.sbatch
+```
+
+Then from your laptop: `ssh -L 8000:<compute-node>:8000 user@cluster` and `./npu_cli.sh chat "Hello"`.
+
+Details: [scripts/hpc/README.txt](scripts/hpc/README.txt). Windows scripts (`acoulm.ps1`, `start_app.ps1`) are not used on the cluster.
+
 ## User Prerequisites
 
 ### Hardware
@@ -114,64 +131,50 @@ If you use a **non-empty** “Files/patterns” filter there (to fetch only some
 
 ## Daily Use
 
-On a **new clone or new PC**, run `.\portable_setup.ps1` once before `.\start_app.ps1` so registries exist and paths are set. You still need **model weights** locally (not in this repository): OpenVINO **IR** and/or a **supported `.gguf`**, depending on your GenAI version; see [Model Notes](#model-notes) and [First-time setup](#first-time-setup).
+**One command:** `acoulm` (after one-time `acoulm setup` on a new machine).
 
-Start stack (browser control panel + backend API):
-
-```powershell
-.\start_app.ps1
-```
-
-If the selected registry model path is a **HF checkpoint folder** (`.safetensors` only), `start_app.ps1` now attempts a one-shot **automatic HF -> IR export** by default for built-in backend users (via `Export-HfFolderToOpenVinoIR.ps1`) and updates the selected registry path on success. Export can fail for some multimodal or custom architectures.
-
-If you want to override behavior:
-- Force on: `.\start_app.ps1 -AutoExportIr` or `ACOULM_AUTO_EXPORT_IR=1`
-- Force off: `.\start_app.ps1 -NoAutoExportIr` or `ACOULM_AUTO_EXPORT_IR=0`
-- Auto-pick best model for this launch: `.\start_app.ps1 -AutoSelectBestModel` or `ACOULM_AUTO_SELECT_MODEL=1` (heuristic prefers lower-overhead format + smaller model size among runnable/existing registry entries)
-- Browser control panel: Control -> Status Cards -> **auto model select at launch** -> Save (persists in `registry/models_registry.json`; applies next stack launch)
-
-`start_app.ps1` is the primary launcher for users (backend + app shell).
-
-- App shell: `http://localhost:5173`
-- API base (default): `http://localhost:8000/v1`
-
-Chat from terminal:
+On a **new clone or new PC**:
 
 ```powershell
-.\npu_cli.ps1
+acoulm setup
 ```
 
-### One command launcher (`acoulm`)
-
-After running `.\portable_setup.ps1` once, you can use **one command** for daily use:
+Then daily use:
 
 ```powershell
 acoulm
 ```
 
-`acoulm` starts the **control panel** (`http://localhost:5173`) and **backend API** (`http://localhost:8000/v1`) if needed, then opens **terminal chat**.
+That starts the **control panel** (`http://localhost:5173`), **backend API** (`http://localhost:8000/v1`) if needed, opens the browser, and drops you into **terminal chat**.
 
-`portable_setup.ps1` also installs a global `acoulm` launcher in `%USERPROFILE%\.local\bin` and sets `ACOULM_HOME`, so `acoulm` works from any folder after opening a new terminal.
+| Task | Command |
+|------|---------|
+| Default (UI + API + terminal chat) | `acoulm` |
+| One-time machine setup (PATH, `ACOULM_HOME`) | `acoulm setup` |
+| Start stack only (no chat) | `acoulm start` |
+| Start with visible backend window (debug) | `acoulm start -VisibleBackend` |
+| CPU only (safest on 16GB RAM) | `acoulm cpu` |
+| Fast preset (GPU, single device) | `acoulm perf` or `acoulm start -PerformanceMode` |
+| Control panel only | `acoulm panel` |
+| Terminal chat (stack started if needed) | `acoulm chat` |
+| Runtime status JSON (outside chat) | `acoulm status` |
+| One-shot message | `acoulm chat hello` or `acoulm "hello"` |
+| List registered models | `acoulm model list` |
+| Download a GGUF model | `acoulm model download <repo> <id> <file>` |
+| Feature A/B benchmark | `acoulm bench -PairedInterleaved` (alias: `acoulm benchmark`) |
+| Rebuild backend | `acoulm build` |
+| Stop backend + control panel | `acoulm stop` |
+| Full restart (visible launcher) | `acoulm restart` |
+| Command reference | `acoulm help` |
+| Advanced CLI passthrough | `acoulm run …` |
 
-### Optional: make `acoulm` faster (persisted)
+`acoulm setup` installs a global launcher in `%USERPROFILE%\.local\bin` and sets `ACOULM_HOME`, so `acoulm` works from any folder after a new terminal.
 
-Run once (writes `registry\performance_profile.json`):
+You still need **model weights** locally (OpenVINO **IR** and/or **`.gguf`**); see [Model Notes](#model-notes). HF `.safetensors` folders may auto-export to IR on launch (env `ACOULM_AUTO_EXPORT_IR=1` / `0`).
 
-```powershell
-.\start_app.ps1 -PerformanceMode
-```
+**Memory safety (important on 16GB machines):** default `acoulm` loads **one** device only. Earlier builds could auto-load GPU+NPU (two full copies) and exhaust RAM. Use `acoulm cpu` for CPU-only. Multi-device split-prefill requires `ACOULM_ALLOW_MULTI_DEVICE=1`. Optional auto GPU tuning on every launch: `ACOULM_AUTOTUNE=1` (off by default).
 
-Interactive chat commands are intentionally minimal:
-- `/status`
-- `/exit`
-
-One-shot chat:
-
-```powershell
-.\npu_cli.ps1 -Command chat -Arguments "hello"
-```
-
-Runtime control (device, policy, feature toggles, registry selection) is browser-first in `start_app.ps1` flow, via the app shell.
+**Inside terminal chat** (after `acoulm` or `acoulm chat`), only slash commands are special: `/status`, `/exit`. Typing `status` or `exit` without a leading `/` is sent to the model as normal text. Device, policy, toggles, and registry are controlled in the control panel at `http://localhost:5173`.
 
 ### Feature A/B benchmark (optional)
 
@@ -180,16 +183,16 @@ To compare **AcouLM routing features on vs a simpler baseline** on your machine 
 **PowerShell (writes JSON under `benchmark_outputs/` on your machine; that folder is gitignored and not part of the clone):**
 
 ```powershell
-.\benchmark_acoulm_toggle.ps1
+acoulm bench -PairedInterleaved
 ```
 
-Each run also writes **`bench_analysis_<timestamp>.json`**: Welch two-sample *t* on means, percentile **bootstrap 95% CI** for mean(enabled)−mean(baseline) per metric, pooled **Cohen’s d** (with sign oriented so positive means “enabled wins” on that metric), and optional **paired** wall-time stats when you use **`-PairedInterleaved`**. That switch runs the same prompt each round but alternates which scenario runs first, so each run index is a fair pair for thermal drift—recommended when you care whether a few-percent wall-time gap is real or noise.
+(`acoulm bench` starts the API if it is offline.) Each run writes JSON under `benchmark_outputs/`. Use **`-PairedInterleaved`** for fair paired comparisons. Override API URL with `-ApiBase` on the underlying script if needed.
 
-Requires the stack running (`.\start_app.ps1`) and the API reachable at `http://127.0.0.1:8000` (override with `-ApiBase`). If the server is still starting, use **`-WaitForApiSec 120`** to poll `/v1/health` every 2 seconds for up to two minutes. NVIDIA VRAM is sampled only when `nvidia-smi` is available; Intel GPU/NPU paths typically leave VRAM blank in that script.
+**Browser:** control panel → **Feature compare** — same interleaved schedule as `acoulm bench`.
 
-**Browser control panel:** open the app shell → **Control** → **System & health** → **Feature compare (AcouLM vs baseline)** → **Run feature compare**. This uses the **paired interleaved** schedule, prints the statistical comparison table (Welch, bootstrap, Cohen *d*, paired wall row) after the averages, and restores your feature toggles afterward.
+**What the compare actually measures:** API chat with **split-prefill** and **context-routing** applied on the server inference path vs the same stack with those flags off. It does **not** include `optimize-memory` (that flag only enables memory monitoring). For split-prefill to engage, two devices must be loaded (for example `acoulm perf` or `acoulm start -PerformanceMode`). Rebuild with `acoulm build` after pulling routing fixes.
 
-**Illustrative numbers (not a guarantee — one Windows + GPU sample, `max_tokens=128`, four timed runs after one warmup):** in that run, enabling `split-prefill` failed with HTTP 409, so the “features on” side used **context-routing** + **optimize-memory** only (split-prefill stayed off). Averages from `benchmark_outputs/bench_summary_20260514-142010.json`:
+**Illustrative numbers (not a guarantee — one Windows + GPU sample, `max_tokens=128`, four timed runs after one warmup):** in an older sample run, enabling `split-prefill` failed with HTTP 409, so the “features on” side used **context-routing** only (split-prefill stayed off). Averages from `benchmark_outputs/bench_summary_20260514-142010.json`:
 
 | Scenario | Avg wall (ms) | Avg TTFT (ms) | Avg TPOT (ms) | Avg TPS (status) |
 |----------|---------------:|---------------:|---------------:|-----------------:|

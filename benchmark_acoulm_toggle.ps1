@@ -1,9 +1,9 @@
 param(
     [string]$ApiBase = "http://127.0.0.1:8000",
     [string]$Model = "openvino",
-    [int]$WarmupRuns = 1,
-    [int]$TimedRuns = 4,
-    [int]$MaxTokens = 128,
+    [int]$WarmupRuns = 0,
+    [int]$TimedRuns = 3,
+    [int]$MaxTokens = 64,
     # Interleave enabled/baseline each round (same run index = same thermal epoch) for paired deltas.
     [switch]$PairedInterleaved,
     # Resample each group independently to estimate CI for mean(enabled_wall) - mean(baseline_wall).
@@ -13,6 +13,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+$script:LastBenchFeatureState = $null
 
 function Invoke-ApiJson {
     param(
@@ -113,8 +115,7 @@ function Run-OneInference {
     $elapsedMs = ((Get-Date) - $start).TotalMilliseconds
     $gpuAfter = Get-GpuMemoryUsedMb
 
-    $status = Invoke-ApiJson -Path "/v1/cli/status" -Method "GET" -TimeoutSec 30
-    $metricsLast = Invoke-ApiJson -Path "/v1/cli/metrics?mode=last" -Method "GET" -TimeoutSec 30
+    $metricsLast = Invoke-ApiJson -Path "/v1/cli/metrics?mode=last" -Method "GET" -TimeoutSec 15
 
     $completionTokens = $null
     $promptTokens = $null
@@ -143,12 +144,12 @@ function Run-OneInference {
 
     return [pscustomobject]@{
         wall_ms            = [math]::Round($elapsedMs, 2)
-        ttft_ms            = if ($status.ttft_ms) { [double]$status.ttft_ms } else { $null }
-        tpot_ms            = if ($status.tpot_ms) { [double]$status.tpot_ms } else { $null }
-        status_tps         = if ($status.throughput) { [double]$status.throughput } else { $null }
-        status_split_prefill = if ($status.split_prefill) { [string]$status.split_prefill } else { $null }
-        status_context_routing = if ($status.context_routing) { [string]$status.context_routing } else { $null }
-        status_optimize_memory = if ($status.optimize_memory) { [string]$status.optimize_memory } else { $null }
+        ttft_ms            = if ($metricsLast.ttft_ms) { [double]$metricsLast.ttft_ms } else { $null }
+        tpot_ms            = if ($metricsLast.tpot_ms) { [double]$metricsLast.tpot_ms } else { $null }
+        status_tps         = if ($metricsLast.throughput_tok_s) { [double]$metricsLast.throughput_tok_s } elseif ($metricsLast.throughput) { [double]$metricsLast.throughput } else { $null }
+        status_split_prefill = $null
+        status_context_routing = $null
+        status_optimize_memory = $null
         total_ms_metrics   = if ($metricsLast.total_ms) { [double]$metricsLast.total_ms } else { $null }
         completion_tokens  = $completionTokens
         prompt_tokens      = $promptTokens
@@ -162,19 +163,31 @@ function Apply-ScenarioFeatures {
         [bool]$SplitPrefill,
         [bool]$ContextRouting
     )
+    if ($script:LastBenchFeatureState -and
+        $script:LastBenchFeatureState.SplitPrefill -eq $SplitPrefill -and
+        $script:LastBenchFeatureState.ContextRouting -eq $ContextRouting) {
+        return $script:LastBenchFeatureState.Meta
+    }
     $splitResult = Try-SetFeature -Name "split-prefill" -Enabled $SplitPrefill
     $ctxResult = Try-SetFeature -Name "context-routing" -Enabled $ContextRouting
-    $memResult = Try-SetFeature -Name "optimize-memory" -Enabled $ContextRouting
+    # optimize-memory is a memory-monitor flag, not an inference path toggle.
+    $memResult = Try-SetFeature -Name "optimize-memory" -Enabled $false
     if (-not $splitResult.ok -and $SplitPrefill) {
         Write-Host "Falling back to split-prefill=false for this scenario." -ForegroundColor Yellow
         Try-SetFeature -Name "split-prefill" -Enabled $false | Out-Null
         $splitResult = [pscustomobject]@{ ok = $false }
     }
-    return [pscustomobject]@{
+    $meta = [pscustomobject]@{
         splitResult = $splitResult
         ctxResult   = $ctxResult
         memResult   = $memResult
     }
+    $script:LastBenchFeatureState = [pscustomobject]@{
+        SplitPrefill    = $SplitPrefill
+        ContextRouting  = $ContextRouting
+        Meta            = $meta
+    }
+    return $meta
 }
 
 function Add-ScenarioMetadata {
@@ -228,13 +241,21 @@ function Run-Scenario {
 function Run-PairedInterleaved {
     param([string]$Prompt)
 
+    $totalSteps = (2 * $WarmupRuns) + (2 * $TimedRuns)
+    $benchStep = 0
+    function Show-BenchProgress([string]$Label) {
+        $benchStep++
+        Write-Host "  [$benchStep/$totalSteps] $Label" -ForegroundColor DarkCyan
+    }
+
     Write-Host ""
-    Write-Host "=== Paired interleaved mode (reduces thermal/order drift) ===" -ForegroundColor Cyan
+    Write-Host "=== Paired interleaved mode ($totalSteps completions) ===" -ForegroundColor Cyan
 
     Write-Host "Warmup: acoulm_enabled..."
     $null = Apply-ScenarioFeatures -SplitPrefill $true -ContextRouting $true
     Invoke-ApiJson -Path "/v1/cli/metrics?mode=clear" -Method "GET" -TimeoutSec 30 | Out-Null
     for ($i = 1; $i -le $WarmupRuns; $i++) {
+        Show-BenchProgress "warmup acoulm_enabled $i/$WarmupRuns"
         $null = Run-OneInference -Prompt $Prompt -MaxNewTokens $MaxTokens
     }
 
@@ -242,6 +263,7 @@ function Run-PairedInterleaved {
     $null = Apply-ScenarioFeatures -SplitPrefill $false -ContextRouting $false
     Invoke-ApiJson -Path "/v1/cli/metrics?mode=clear" -Method "GET" -TimeoutSec 30 | Out-Null
     for ($i = 1; $i -le $WarmupRuns; $i++) {
+        Show-BenchProgress "warmup baseline_single_path $i/$WarmupRuns"
         $null = Run-OneInference -Prompt $Prompt -MaxNewTokens $MaxTokens
     }
 
@@ -255,6 +277,7 @@ function Run-PairedInterleaved {
         if ($enabledFirst) {
             $metaE = Apply-ScenarioFeatures -SplitPrefill $true -ContextRouting $true
             Invoke-ApiJson -Path "/v1/cli/metrics?mode=clear" -Method "GET" -TimeoutSec 30 | Out-Null
+            Show-BenchProgress "timed $i/$TimedRuns acoulm_enabled"
             $rE = Run-OneInference -Prompt $Prompt -MaxNewTokens $MaxTokens
             Add-ScenarioMetadata -row $rE -Name "acoulm_enabled" -RunIndex $i -SplitPrefill $true -ContextRouting $true -meta $metaE
             $rE | Add-Member -NotePropertyName pair_index -NotePropertyValue $i -Force
@@ -262,6 +285,7 @@ function Run-PairedInterleaved {
 
             $metaB = Apply-ScenarioFeatures -SplitPrefill $false -ContextRouting $false
             Invoke-ApiJson -Path "/v1/cli/metrics?mode=clear" -Method "GET" -TimeoutSec 30 | Out-Null
+            Show-BenchProgress "timed $i/$TimedRuns baseline_single_path"
             $rB = Run-OneInference -Prompt $Prompt -MaxNewTokens $MaxTokens
             Add-ScenarioMetadata -row $rB -Name "baseline_single_path" -RunIndex $i -SplitPrefill $false -ContextRouting $false -meta $metaB
             $rB | Add-Member -NotePropertyName pair_index -NotePropertyValue $i -Force
@@ -269,6 +293,7 @@ function Run-PairedInterleaved {
         } else {
             $metaB = Apply-ScenarioFeatures -SplitPrefill $false -ContextRouting $false
             Invoke-ApiJson -Path "/v1/cli/metrics?mode=clear" -Method "GET" -TimeoutSec 30 | Out-Null
+            Show-BenchProgress "timed $i/$TimedRuns baseline_single_path"
             $rB = Run-OneInference -Prompt $Prompt -MaxNewTokens $MaxTokens
             Add-ScenarioMetadata -row $rB -Name "baseline_single_path" -RunIndex $i -SplitPrefill $false -ContextRouting $false -meta $metaB
             $rB | Add-Member -NotePropertyName pair_index -NotePropertyValue $i -Force
@@ -276,6 +301,7 @@ function Run-PairedInterleaved {
 
             $metaE = Apply-ScenarioFeatures -SplitPrefill $true -ContextRouting $true
             Invoke-ApiJson -Path "/v1/cli/metrics?mode=clear" -Method "GET" -TimeoutSec 30 | Out-Null
+            Show-BenchProgress "timed $i/$TimedRuns acoulm_enabled"
             $rE = Run-OneInference -Prompt $Prompt -MaxNewTokens $MaxTokens
             Add-ScenarioMetadata -row $rE -Name "acoulm_enabled" -RunIndex $i -SplitPrefill $true -ContextRouting $true -meta $metaE
             $rE | Add-Member -NotePropertyName pair_index -NotePropertyValue $i -Force
@@ -283,6 +309,7 @@ function Run-PairedInterleaved {
         }
     }
 
+    $script:LastBenchFeatureState = $null
     return [pscustomobject]@{ enabledRows = $enabledRows; baselineRows = $baselineRows }
 }
 
@@ -550,7 +577,14 @@ while ($true) {
 }
 Write-Host ("Health: " + ($health | ConvertTo-Json -Compress))
 
-$prompt = "Write five concise bullet points about why local LLM inference can improve privacy."
+# ~130 estimated tokens — enough for context-routing without a very long prefill.
+$prompt = @"
+For an enterprise security brief, write four bullet points on why local LLM inference improves privacy:
+(1) data residency and on-prem prompts, (2) reduced third-party API exposure, (3) on-device control and
+air-gapped options, (4) auditability for regulated industries. Add two sentences on predictable latency
+when embeddings stay on local accelerators. End with one sentence on when GPU prefill plus NPU or GPU
+decode improves throughput versus cloud-only APIs.
+"@.Trim()
 
 if ($PairedInterleaved) {
     $pairResult = Run-PairedInterleaved -Prompt $prompt

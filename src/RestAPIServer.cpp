@@ -1,14 +1,8 @@
 #include "RestAPIServer.h"
+#include "InferenceRouting.h"
 #include <httplib.h>
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <psapi.h>
 #include <nlohmann/json.hpp>
+#include "platform_util.h"
 #include <iostream>
 #include <sstream>
 #include <chrono>
@@ -32,36 +26,8 @@
 using json = nlohmann::json;
 
 namespace {
-std::filesystem::path detect_project_root() {
-    try {
-        char exe_path[MAX_PATH]{};
-        const DWORD len = GetModuleFileNameA(nullptr, exe_path, static_cast<DWORD>(sizeof(exe_path)));
-        if (len > 0 && len < sizeof(exe_path)) {
-            const std::filesystem::path exe_dir = std::filesystem::path(std::string(exe_path)).parent_path();
-            std::vector<std::filesystem::path> candidates = {
-                exe_dir,
-                exe_dir.parent_path(),
-                exe_dir.parent_path().parent_path()
-            };
-            for (const auto& candidate : candidates) {
-                if (candidate.empty()) {
-                    continue;
-                }
-                std::error_code ec;
-                if (std::filesystem::exists(candidate / "run.ps1", ec) ||
-                    std::filesystem::exists(candidate / "registry", ec)) {
-                    return candidate;
-                }
-            }
-        }
-    } catch (...) {
-        // Fall back to current working directory.
-    }
-    return std::filesystem::current_path();
-}
-
 const std::filesystem::path& project_root_path() {
-    static const std::filesystem::path root = detect_project_root();
+    static const std::filesystem::path root = acoulm::detect_project_root();
     return root;
 }
 
@@ -91,12 +57,20 @@ const std::filesystem::path& launch_state_path() {
 }
 
 const std::filesystem::path& restart_script_path() {
+#ifdef _WIN32
     static const std::filesystem::path path = project_root_path() / "restart_backend.ps1";
+#else
+    static const std::filesystem::path path = project_root_path() / "restart_backend.sh";
+#endif
     return path;
 }
 
 const std::filesystem::path& restart_stack_script_path() {
+#ifdef _WIN32
     static const std::filesystem::path path = project_root_path() / "restart_stack.ps1";
+#else
+    static const std::filesystem::path path = project_root_path() / "restart_stack.sh";
+#endif
     return path;
 }
 
@@ -197,7 +171,7 @@ void save_npu_launch_state(int argc, char** argv) {
         json doc = json::object();
         doc["argv"] = argv_json;
         doc["project_root"] = project_root_path().string();
-        doc["backend_pid"] = static_cast<int>(GetCurrentProcessId());
+        doc["backend_pid"] = static_cast<int>(acoulm::process_id());
         std::ofstream f(launch_state_path());
         f << doc.dump(2);
     } catch (...) {
@@ -212,34 +186,34 @@ RestAPIServer::RestAPIServer(BackendPool* pool, RuntimeConfig* config, int port)
 
 namespace {
 std::mutex g_metrics_file_mutex;
+std::mutex g_inference_dispatch_mutex;
 std::atomic<int> g_active_chat_requests{0};
 
 std::optional<json> current_process_memory_json() {
-    const auto to_mb = [](SIZE_T bytes) -> int64_t {
-        return static_cast<int64_t>(bytes / (1024ull * 1024ull));
-    };
-
-    PROCESS_MEMORY_COUNTERS_EX pmc_ex{};
-    if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc_ex), sizeof(pmc_ex))) {
-        return json{
-            {"pid", static_cast<int64_t>(GetCurrentProcessId())},
-            {"working_set_mb", to_mb(pmc_ex.WorkingSetSize)},
-            {"private_mb", to_mb(pmc_ex.PrivateUsage)},
-            {"peak_working_set_mb", to_mb(pmc_ex.PeakWorkingSetSize)}
-        };
+    const auto mem = acoulm::current_process_memory_json();
+    if (!mem.has_value()) {
+        return std::nullopt;
     }
+    return *mem;
+}
 
-    PROCESS_MEMORY_COUNTERS pmc{};
-    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
-        return json{
-            {"pid", static_cast<int64_t>(GetCurrentProcessId())},
-            {"working_set_mb", to_mb(pmc.WorkingSetSize)},
-            {"private_mb", to_mb(pmc.PagefileUsage)},
-            {"peak_working_set_mb", to_mb(pmc.PeakWorkingSetSize)}
-        };
+std::string classify_openvino_device_tier(const std::string& device_id, const std::string& full_name) {
+    if (device_id != "GPU") {
+        return device_id == "NPU" ? "accelerator" : "cpu";
     }
-
-    return std::nullopt;
+    std::string lower = full_name;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    if (lower.find("nvidia") != std::string::npos || lower.find("geforce") != std::string::npos ||
+        lower.find("radeon rx") != std::string::npos || lower.find("arc") != std::string::npos) {
+        return "discrete";
+    }
+    if (lower.find("uhd") != std::string::npos || lower.find("iris") != std::string::npos ||
+        lower.find("hd graphics") != std::string::npos || lower.find("vega") != std::string::npos) {
+        return "integrated";
+    }
+    return "unknown";
 }
 
 json probe_available_devices() {
@@ -248,11 +222,14 @@ json probe_available_devices() {
         ov::Core core;
         for (const auto& id : core.get_available_devices()) {
             json item = { {"id", id} };
+            std::string full_name = "unknown";
             try {
-                item["name"] = core.get_property(id, ov::device::full_name);
+                full_name = core.get_property(id, ov::device::full_name);
+                item["name"] = full_name;
             } catch (...) {
-                item["name"] = "unknown";
+                item["name"] = full_name;
             }
+            item["tier"] = classify_openvino_device_tier(id, full_name);
             devices.push_back(item);
         }
     } catch (...) {
@@ -273,8 +250,8 @@ json build_device_load_hints(const std::string& device, const std::string& error
     });
 
     if (upper_device == "GPU") {
-        hints.push_back("Verify Intel GPU drivers and OpenVINO GPU runtime are installed.");
-        hints.push_back("Try CPU or NPU first: .\\npu_cli.ps1 -Command switch -Arguments \"CPU\"");
+        hints.push_back("Verify Intel/AMD/NVIDIA GPU drivers and OpenVINO GPU runtime are installed.");
+        hints.push_back("Integrated GPUs are often no faster than CPU on 3B GGUF; try NPU or export OpenVINO IR.");
         hints.push_back("Attempt explicit preload: .\\npu_cli.ps1 -Command load -Arguments \"GPU\"");
     }
     if (upper_device == "NPU") {
@@ -1000,14 +977,17 @@ void append_metrics_record(const json& record) {
             continue;
         }
         out << record.dump() << "\n";
-        out.flush();
+        const char* sync = std::getenv("ACOULM_METRICS_SYNC");
+        if (sync && sync[0] == '1') {
+            out.flush();
+        }
         return;
     }
 }
 
 std::string profile_for_policy(EnginePolicy p) {
     switch (p) {
-        case EnginePolicy::PERFORMANCE: return "balanced-performance";
+        case EnginePolicy::PERFORMANCE: return "latency-first";
         case EnginePolicy::BATTERY_SAVER: return "latency-first";
         case EnginePolicy::BALANCED:
         default: return "default";
@@ -1090,7 +1070,22 @@ void try_load_performance_profile(RuntimeConfig* config) {
 }
 
 RestAPIServer::RestAPIServer(BackendPool* pool, RuntimeConfig* config, KVCacheMonitor* kv_monitor, int port)
-    : backend_pool_(pool), config_(config ? config : &default_config_), kv_monitor_(kv_monitor), port_(port), running_(false) {
+    : RestAPIServer(pool, config, kv_monitor, nullptr, port) {}
+
+RestAPIServer::RestAPIServer(
+    BackendPool* pool,
+    RuntimeConfig* config,
+    KVCacheMonitor* kv_monitor,
+    IScheduler* scheduler,
+    int port
+)
+    : backend_pool_(pool),
+      config_(config ? config : &default_config_),
+      kv_monitor_(kv_monitor),
+      scheduler_(scheduler),
+      port_(port),
+      running_(false),
+      listening_(false) {
     if (!config) {
         try_load_performance_profile(config_);
     }
@@ -1231,7 +1226,8 @@ RestAPIServer::~RestAPIServer() {
 }
 
 void RestAPIServer::start() {
-    running_ = true;
+    listening_.store(false, std::memory_order_relaxed);
+    running_.store(false, std::memory_order_relaxed);
     std::cout << "[RestAPI] Starting server on http://localhost:" << port_ << "\n";
     std::cout << "[RestAPI] Chat Endpoint:\n";
     std::cout << "  - POST http://localhost:" << port_ << "/v1/chat/completions (pure chat only)\n";
@@ -1264,9 +1260,13 @@ void RestAPIServer::start() {
         if (!server_->bind_to_port("0.0.0.0", port_)) {
             std::cerr << "[RestAPI] FAILED - Could not bind to port " << port_ << " (may be in use?)\n";
             std::cerr.flush();
-            running_ = false;
+            listening_.store(false, std::memory_order_relaxed);
+            running_.store(false, std::memory_order_relaxed);
             return;
         }
+
+        listening_.store(true, std::memory_order_release);
+        running_.store(true, std::memory_order_release);
         
         std::cout << "[RestAPI] Successfully bound to port " << port_ << "\n";
         std::cout << "[RestAPI] Server is now READY and listening for requests\n";
@@ -1276,32 +1276,51 @@ void RestAPIServer::start() {
         if (!server_->listen_after_bind()) {
             std::cerr << "[RestAPI] Error in listen event loop\n";
             std::cerr.flush();
-            running_ = false;
+            listening_.store(false, std::memory_order_relaxed);
+            running_.store(false, std::memory_order_relaxed);
             return;
         }
     } catch (const std::exception& e) {
         std::cerr << "[RestAPI] EXCEPTION: " << e.what() << "\n";
         std::cerr.flush();
-        running_ = false;
+        listening_.store(false, std::memory_order_relaxed);
+        running_.store(false, std::memory_order_relaxed);
         return;
     } catch (...) {
         std::cerr << "[RestAPI] UNKNOWN EXCEPTION\n";
         std::cerr.flush();
-        running_ = false;
+        listening_.store(false, std::memory_order_relaxed);
+        running_.store(false, std::memory_order_relaxed);
         return;
     }
 }
 
 void RestAPIServer::stop() {
-    if (running_) {
+    if (running_.load(std::memory_order_relaxed)) {
         std::cout << "[RestAPI] Stopping server...\n";
         server_->stop();
-        running_ = false;
+        listening_.store(false, std::memory_order_relaxed);
+        running_.store(false, std::memory_order_relaxed);
     }
 }
 
 bool RestAPIServer::is_running() const {
-    return running_;
+    return running_.load(std::memory_order_acquire);
+}
+
+bool RestAPIServer::is_listening() const {
+    return listening_.load(std::memory_order_acquire);
+}
+
+bool RestAPIServer::wait_until_listening(int timeout_ms) const {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (is_listening()) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return is_listening();
 }
 
 void RestAPIServer::handle_chat_completions(const httplib::Request& req, httplib::Response& res) {
@@ -1314,6 +1333,20 @@ void RestAPIServer::handle_chat_completions(const httplib::Request& req, httplib
                 "terminal_chat_only",
                 "Chat is terminal-only. Use .\\npu_cli.ps1 -Command chat",
                 json{{"required_header", "x-npu-cli: true"}}
+            );
+            return;
+        }
+
+        // Serialize all chat generations (OpenVINO continuous batching allows one in-flight generate).
+        std::lock_guard<std::mutex> inference_slot(g_inference_dispatch_mutex);
+
+        const auto loaded_devices = backend_pool_->get_loaded_devices();
+        if (loaded_devices.empty()) {
+            set_error_response(
+                res,
+                503,
+                "model_not_ready",
+                "Model is still loading. Wait until terminal chat shows [ready], then try again."
             );
             return;
         }
@@ -1380,6 +1413,8 @@ void RestAPIServer::handle_chat_completions(const httplib::Request& req, httplib
         
         std::string prompt = prompt_builder.str();
 
+        apply_inference_routing(backend_pool_, config_, scheduler_, prompt);
+
         auto* backend = backend_pool_->get_active_backend();
         if (!backend) {
             throw std::runtime_error("No active backend is available");
@@ -1404,12 +1439,28 @@ void RestAPIServer::handle_chat_completions(const httplib::Request& req, httplib
             completion_tokens = 0;
         } else {
             // Normal chat generation path.
-            auto output = backend->generate_output(
-                prompt, max_tokens, temperature, false
-            );
-            response_text = output.text;
-            completion_tokens = output.token_ids.size();
-            generated_output = true;
+            try {
+                auto output = backend->generate_output(
+                    prompt, max_tokens, temperature, false
+                );
+                response_text = output.text;
+                completion_tokens = output.token_ids.size();
+                generated_output = true;
+            } catch (const std::exception& gen_e) {
+                const std::string err = gen_e.what();
+                if (err.find("has_non_finished_requests") != std::string::npos ||
+                    err.find("ContinuousBatchingPipeline") != std::string::npos) {
+                    set_error_response(
+                        res,
+                        503,
+                        "inference_busy",
+                        "Model is busy finishing a previous request. Wait a few seconds and try again.",
+                        json{{"exception", err}, {"hint", "Use only terminal chat (acoulm). Close other tabs if needed."}}
+                    );
+                    return;
+                }
+                throw;
+            }
         }
 
         if (generated_output) {
@@ -1595,11 +1646,63 @@ void RestAPIServer::handle_list_models(const httplib::Request& req, httplib::Res
 }
 
 void RestAPIServer::handle_health(const httplib::Request& req, httplib::Response& res) {
+    (void)req;
+    const auto loaded = backend_pool_->get_loaded_devices();
+    const bool inference_busy = g_active_chat_requests.load(std::memory_order_relaxed) > 0;
+    const bool chat_ready = !loaded.empty();
+
+    int64_t model_weight_bytes = 0;
+    std::string load_tier = "unknown";
+    std::string load_format = "unknown";
+    try {
+        const std::string& model_path = backend_pool_->get_model_path();
+        if (!model_path.empty()) {
+            namespace fs = std::filesystem;
+            if (fs::is_regular_file(model_path)) {
+                model_weight_bytes = static_cast<int64_t>(fs::file_size(model_path));
+                load_format = "gguf";
+            } else if (fs::is_directory(model_path)) {
+                for (const auto& entry : fs::recursive_directory_iterator(
+                         model_path, fs::directory_options::skip_permission_denied)) {
+                    if (!entry.is_regular_file()) {
+                        continue;
+                    }
+                    const auto ext = entry.path().extension().string();
+                    if (ext == ".gguf" || ext == ".bin" || ext == ".xml") {
+                        model_weight_bytes += static_cast<int64_t>(entry.file_size());
+                    }
+                    if (ext == ".xml") {
+                        load_format = "ir";
+                    }
+                }
+                if (load_format != "ir" && model_weight_bytes > 0) {
+                    load_format = "folder";
+                }
+            }
+            const double weight_gb = static_cast<double>(model_weight_bytes) / (1024.0 * 1024.0 * 1024.0);
+            if (weight_gb < 2.0) {
+                load_tier = "small";
+            } else if (weight_gb < 4.0) {
+                load_tier = "medium";
+            } else if (weight_gb < 8.0) {
+                load_tier = "large";
+            } else {
+                load_tier = "xlarge";
+            }
+        }
+    } catch (...) {
+    }
+
     json response = {
-        {"status", "healthy"},
-        {"backend", backend_pool_->get_active_device()}
+        {"status", chat_ready ? "healthy" : "loading"},
+        {"backend", backend_pool_->get_active_device()},
+        {"chat_ready", chat_ready},
+        {"inference_busy", inference_busy},
+        {"model_weight_bytes", model_weight_bytes},
+        {"load_tier", load_tier},
+        {"load_format", load_format}
     };
-    
+
     set_json_response(res, response);
 }
 
@@ -1746,7 +1849,9 @@ void RestAPIServer::handle_cli_policy(const httplib::Request& req, httplib::Resp
         
         EnginePolicy new_policy = string_to_policy(policy_str);
         config_->set_policy(new_policy);
-        config_->set_performance_profile(profile_for_policy(new_policy), "api-policy-update");
+        const std::string perf_profile = profile_for_policy(new_policy);
+        config_->set_performance_profile(perf_profile, "api-policy-update");
+        acoulm::set_env_var("ACOULM_PERF_MODE", perf_profile);
         persist_performance_profile(config_);
         
         json response = {
@@ -1789,19 +1894,29 @@ void RestAPIServer::handle_cli_feature_toggle(const httplib::Request& req, httpl
             response["status"] = enabled ? "enabled" : "disabled";
             response["success"] = true;
         } else if (feature == "split-prefill") {
-            if (enabled && backend_pool_->get_loaded_devices().size() < 2) {
-                set_error_response(
-                    res,
-                    409,
-                    "insufficient_devices",
-                    "At least 2 devices are required for split-prefill"
-                );
-                return;
-            } else {
-                config_->set_split_prefill(enabled);
-                response["status"] = enabled ? "enabled" : "disabled";
-                response["success"] = true;
+            if (enabled) {
+                std::string load_error;
+                if (!ensure_split_prefill_devices_loaded(backend_pool_, config_, scheduler_, load_error)) {
+                    set_error_response(
+                        res,
+                        409,
+                        "insufficient_devices",
+                        "At least 2 devices are required for split-prefill",
+                        json{{"detail", load_error}}
+                    );
+                    return;
+                }
             }
+            config_->set_split_prefill(enabled);
+            if (!enabled) {
+                config_->set_use_prefill_device(false);
+            }
+            response["status"] = enabled ? "enabled" : "disabled";
+            response["success"] = true;
+            response["loaded_devices"] = backend_pool_->get_loaded_devices();
+            response["prefill_device"] = config_->prefill_device;
+            response["decode_device"] = config_->decode_device;
+            response["active_device"] = backend_pool_->get_active_device();
         } else if (feature == "context-routing") {
             config_->set_context_routing(enabled);
             response["status"] = enabled ? "enabled" : "disabled";
@@ -2457,7 +2572,7 @@ void RestAPIServer::handle_cli_backend_restart(const httplib::Request&, httplib:
                 res,
                 400,
                 "launch_state_missing",
-                "registry/npu_launch_state.json not found. Start the backend from run.ps1 / start_app.ps1 once, then try again."
+                "registry/npu_launch_state.json not found. Start the backend from run.sh or run.ps1 once, then try again."
             );
             return;
         }
@@ -2466,7 +2581,7 @@ void RestAPIServer::handle_cli_backend_restart(const httplib::Request&, httplib:
                 res,
                 500,
                 "restart_script_missing",
-                "restart_backend.ps1 not found in project root."
+                "restart_backend script not found in project root."
             );
             return;
         }
@@ -2475,37 +2590,14 @@ void RestAPIServer::handle_cli_backend_restart(const httplib::Request&, httplib:
 
         set_json_response(res, json({
             {"success", true},
-            {"note", "Backend restart scheduled. This process will exit; run.ps1 will start again with the selected backend entrypoint."}
+            {"note", "Backend restart scheduled. This process will exit; run.sh / run.ps1 will start again with the saved argv."}
         }));
 
         std::thread([root, script]() {
             std::this_thread::sleep_for(std::chrono::milliseconds(900));
-            std::string cmd =
-                "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + script + "\"";
-            STARTUPINFOA si{};
-            si.cb = sizeof(si);
-            PROCESS_INFORMATION pi{};
-            std::vector<char> cmdline(cmd.begin(), cmd.end());
-            cmdline.push_back('\0');
-            CreateProcessA(
-                nullptr,
-                cmdline.data(),
-                nullptr,
-                nullptr,
-                FALSE,
-                0,
-                nullptr,
-                root.c_str(),
-                &si,
-                &pi);
-            if (pi.hThread) {
-                CloseHandle(pi.hThread);
-            }
-            if (pi.hProcess) {
-                CloseHandle(pi.hProcess);
-            }
+            acoulm::spawn_detached_script(std::filesystem::path(root), std::filesystem::path(script));
             std::this_thread::sleep_for(std::chrono::milliseconds(400));
-            ExitProcess(0);
+            acoulm::exit_process(0);
         }).detach();
     } catch (const std::exception& e) {
         set_error_response(
@@ -2596,7 +2688,7 @@ void RestAPIServer::handle_cli_stack_restart(const httplib::Request&, httplib::R
                 res,
                 500,
                 "restart_stack_script_missing",
-                "restart_stack.ps1 not found in project root."
+                "restart_stack script not found in project root."
             );
             return;
         }
@@ -2605,30 +2697,7 @@ void RestAPIServer::handle_cli_stack_restart(const httplib::Request&, httplib::R
         set_json_response(res, json({ {"success", true}, {"note", "Full stack restart scheduled (backend + app shell)."} }));
         std::thread([root, script]() {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            std::string cmd =
-                "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Normal -File \"" + script + "\"";
-            STARTUPINFOA si{};
-            si.cb = sizeof(si);
-            PROCESS_INFORMATION pi{};
-            std::vector<char> cmdline(cmd.begin(), cmd.end());
-            cmdline.push_back('\0');
-            CreateProcessA(
-                nullptr,
-                cmdline.data(),
-                nullptr,
-                nullptr,
-                FALSE,
-                0,
-                nullptr,
-                root.c_str(),
-                &si,
-                &pi);
-            if (pi.hThread) {
-                CloseHandle(pi.hThread);
-            }
-            if (pi.hProcess) {
-                CloseHandle(pi.hProcess);
-            }
+            acoulm::spawn_detached_script(std::filesystem::path(root), std::filesystem::path(script));
         }).detach();
     } catch (const std::exception& e) {
         set_error_response(res, 500, "stack_restart_failed", e.what());
@@ -2798,15 +2867,20 @@ void RestAPIServer::handle_cli_diagnostics_export(const httplib::Request&, httpl
         if (!std::filesystem::exists(script)) {
             set_error_response(
                 res,
-                500,
+                501,
                 "export_script_missing",
-                "Export-Diagnostics.ps1 not found in project root."
+                "Diagnostics export is only available on Windows (Export-Diagnostics.ps1)."
             );
             return;
         }
+#ifdef _WIN32
         const std::string cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"" + script.string() + "\"";
         const int r = std::system(cmd.c_str());
         (void)r;
+#else
+        set_error_response(res, 501, "export_unsupported", "Diagnostics export is only available on Windows.");
+        return;
+#endif
         const std::filesystem::path marker = root / "export" / "last-export.txt";
         if (!std::filesystem::exists(marker)) {
             set_error_response(

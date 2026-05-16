@@ -32,11 +32,40 @@ if (-not (Test-Path -LiteralPath $runScript)) {
     exit 1
 }
 
+function Repair-LaunchArgv {
+    param([string[]]$Argv)
+    $out = [System.Collections.Generic.List[string]]::new()
+    for ($i = 0; $i -lt $Argv.Count; $i++) {
+        $a = [string]$Argv[$i]
+        if ($a -eq "--device" -and ($i + 1) -lt $Argv.Count) {
+            $val = [string]$Argv[$i + 1]
+            $i++
+            if ($val -match '^(PERFORMANCE|BATTERY_SAVER|BALANCED)$') {
+                $out.Add("--policy")
+                $out.Add($val)
+                continue
+            }
+            if ($val -match '^(CPU|GPU|NPU)$') {
+                $out.Add("--device")
+                $out.Add($val)
+            }
+            continue
+        }
+        if ($a -eq "--policy" -and ($i + 1) -ge $Argv.Count) {
+            continue
+        }
+        $out.Add($a)
+    }
+    return @($out)
+}
+
 $argList = @()
 if ($null -ne $state.argv) {
+    $raw = @()
     foreach ($a in $state.argv) {
-        $argList += [string]$a
+        $raw += [string]$a
     }
+    $argList = @(Repair-LaunchArgv -Argv $raw)
 }
 
 Write-Host "[restart_backend] Starting: $runScript $($argList -join ' ')" -ForegroundColor Cyan

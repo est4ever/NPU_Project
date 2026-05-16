@@ -7,6 +7,14 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # Keep backend runtime paths stable (registries, metrics, launch state)
 # regardless of where run.ps1 is invoked from.
 Set-Location -LiteralPath $scriptDir
+if ([string]::IsNullOrWhiteSpace($env:ACOULM_HOME)) {
+    $env:ACOULM_HOME = $scriptDir
+}
+if ($env:ACOULM_SNAPPY -ne "0") {
+    $gpuCache = Join-Path $env:ACOULM_HOME "gpu_cache"
+    $null = New-Item -ItemType Directory -Force -Path $gpuCache -ErrorAction SilentlyContinue
+    $env:OV_CACHE_DIR = $gpuCache
+}
 
 function Find-OpenVINOSetupVars {
     if ($env:OPENVINO_GENAI_DIR) {
