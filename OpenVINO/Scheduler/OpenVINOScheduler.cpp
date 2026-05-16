@@ -3,6 +3,65 @@
 #include <iostream>
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
+#include <filesystem>
+
+namespace {
+
+bool routing_verbose() {
+    const char* v = std::getenv("ACOULM_VERBOSE");
+    return v && v[0] == '1';
+}
+
+bool gpu_disabled_by_env() {
+    const char* no_gpu = std::getenv("ACOULM_NO_GPU");
+    return no_gpu && no_gpu[0] == '1';
+}
+
+std::string resolve_cache_dir(const char* subdir) {
+    const char* home = std::getenv("ACOULM_HOME");
+    std::filesystem::path base = home && home[0] ? std::filesystem::path(home) : std::filesystem::current_path();
+    std::filesystem::path dir = base / subdir;
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    return dir.string();
+}
+
+bool weak_gpu_host() {
+    const char* tier = std::getenv("ACOULM_GPU_TIER");
+    if (!tier || !tier[0]) {
+        return false;
+    }
+    std::string t(tier);
+    return t == "weak" || t == "integrated";
+}
+
+std::string build_auto_device_string(bool gpu, bool npu, bool cpu) {
+    std::string chain = "AUTO:";
+    bool first = true;
+    auto append = [&](const char* id) {
+        if (!first) {
+            chain += ",";
+        }
+        chain += id;
+        first = false;
+    };
+    if (gpu) {
+        append("GPU");
+    }
+    if (npu) {
+        append("NPU");
+    }
+    if (cpu) {
+        append("CPU");
+    }
+    if (first) {
+        return "CPU";
+    }
+    return chain;
+}
+
+} // namespace
 
 OpenVINOScheduler::OpenVINOScheduler() {
     // Automatically discover devices when the scheduler boots up
@@ -28,34 +87,40 @@ std::string OpenVINOScheduler::get_optimal_device(EnginePolicy policy) {
 
     std::cout << "[Scheduler] Applying routing policy...\n";
 
+    const bool weak_host = weak_gpu_host();
+
     switch (policy) {
         case EnginePolicy::PERFORMANCE:
-            // PERFORMANCE is now balanced TTFT + throughput (not hard GPU-only).
-            if (has_gpu && has_npu) {
-                std::cout << "[Scheduler] Policy: PERFORMANCE. Using AUTO:GPU,NPU,CPU for balanced speed.\n";
-                return "AUTO:GPU,NPU,CPU";
+            if (weak_host && has_npu) {
+                std::cout << "[Scheduler] Policy: PERFORMANCE. Weak integrated GPU; preferring NPU.\n";
+                return "NPU";
+            }
+            if (has_gpu && has_npu && !weak_host) {
+                std::cout << "[Scheduler] Policy: PERFORMANCE. Using AUTO:GPU,NPU,CPU.\n";
+                return build_auto_device_string(true, true, true);
             }
             if (has_gpu) {
-                std::cout << "[Scheduler] Policy: PERFORMANCE. Routing to GPU.\n";
+                std::cout << "[Scheduler] Policy: PERFORMANCE. Routing to GPU"
+                          << (weak_host ? " (integrated; compile may be slow)." : ".") << "\n";
                 return "GPU";
             }
             if (has_npu) {
-                std::cout << "[Scheduler] Policy: PERFORMANCE. Routing to NPU (GPU unavailable).\n";
+                std::cout << "[Scheduler] Policy: PERFORMANCE. Routing to NPU.\n";
                 return "NPU";
             }
             return has_cpu ? "CPU" : "AUTO:CPU";
 
         case EnginePolicy::BATTERY_SAVER:
-            // For saving battery, we absolutely want the NPU.
             std::cout << "[Scheduler] Policy: BATTERY SAVER. Routing to NPU.\n";
             return has_npu ? "NPU" : "CPU";
 
         case EnginePolicy::BALANCED:
         default:
-            // Heterogeneous routing: Tell OpenVINO to use the GPU for heavy 
-            // prompt reading, but fallback to NPU/CPU for easy tasks.
-            std::cout << "[Scheduler] Policy: BALANCED. Using AUTO Heterogeneous Routing.\n";
-            return "AUTO:GPU,NPU,CPU"; 
+            std::cout << "[Scheduler] Policy: BALANCED. Using heterogeneous AUTO routing.\n";
+            if (weak_host) {
+                return build_auto_device_string(false, has_npu, has_cpu);
+            }
+            return build_auto_device_string(has_gpu, has_npu, has_cpu);
     }
 }
 
@@ -80,7 +145,7 @@ std::map<std::string, DeviceBenchmark> OpenVINOScheduler::benchmark_devices(
             // Configure pipeline for this device
             ov::AnyMap pipeline_config;
             if (device == "NPU") {
-                pipeline_config["CACHE_DIR"] = "./npu_cache";
+                pipeline_config["CACHE_DIR"] = resolve_cache_dir("npu_cache");
                 pipeline_config["GENERATE_HINT"] = "BEST_PERF";
             }
             
@@ -137,7 +202,7 @@ std::map<std::string, double> OpenVINOScheduler::benchmark_ttft_for_prompt(
         try {
             ov::AnyMap pipeline_config;
             if (device == "NPU") {
-                pipeline_config["CACHE_DIR"] = "./npu_cache";
+                pipeline_config["CACHE_DIR"] = resolve_cache_dir("npu_cache");
                 pipeline_config["GENERATE_HINT"] = "BEST_PERF";
             }
 
@@ -206,19 +271,29 @@ std::string OpenVINOScheduler::get_device_for_context(
     bool has_gpu = std::find(available_devices.begin(), available_devices.end(), "GPU") != available_devices.end();
     bool has_npu = std::find(available_devices.begin(), available_devices.end(), "NPU") != available_devices.end();
     
-    std::cout << "[Scheduler] Context-aware routing for ~" << estimated_tokens << " tokens...\n";
+    if (routing_verbose()) {
+        std::cout << "[Scheduler] Context-aware routing for ~" << estimated_tokens << " tokens...\n";
+    }
     
     if (estimated_tokens < SHORT_PROMPT) {
-        std::cout << "[Scheduler] Short context: routing to NPU/CPU for fast decode\n";
+        if (routing_verbose()) {
+            std::cout << "[Scheduler] Short context: routing to NPU/CPU for fast decode\n";
+        }
         return has_npu ? "NPU" : "CPU";
     } else if (estimated_tokens < MEDIUM_PROMPT) {
-        std::cout << "[Scheduler] Medium context: using standard policy\n";
+        if (routing_verbose()) {
+            std::cout << "[Scheduler] Medium context: using standard policy\n";
+        }
         return get_optimal_device(policy);
     } else if (estimated_tokens < LONG_PROMPT) {
-        std::cout << "[Scheduler] Long context: routing to GPU for prefill\n";
+        if (routing_verbose()) {
+            std::cout << "[Scheduler] Long context: routing to GPU for prefill\n";
+        }
         return has_gpu ? "GPU" : "CPU";
     } else {
-        std::cout << "[Scheduler] Very long context: forcing GPU for heavy prefill\n";
+        if (routing_verbose()) {
+            std::cout << "[Scheduler] Very long context: forcing GPU for heavy prefill\n";
+        }
         return has_gpu ? "GPU" : "CPU";
     }
 }

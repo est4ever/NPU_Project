@@ -56,8 +56,7 @@ function Test-ConnectionFailure {
 
 function Write-BackendUnreachableHint {
     Write-Dim "  Hint: Nothing is listening at $ApiBase (or it is still starting). If you switched model/backend"
-    Write-Dim "  in the browser, wait ~5-10s and try again. Otherwise run .\start_app.ps1 or check the PowerShell"
-    Write-Dim "  window running run.ps1 for errors (bad entrypoint, crash on load, or wrong port)."
+    Write-Dim "  in the browser, wait ~5-10s and try again. Otherwise run acoulm and wait for the model to load."
 }
 
 function Get-ScriptDir {
@@ -511,6 +510,140 @@ function Show-RuntimeBanner {
 }
 
 # ---------------------------------------------------------------------------
+# Backend readiness (model loaded + HTTP up)
+# ---------------------------------------------------------------------------
+
+function Test-BackendProcessRunning {
+    return $null -ne (Get-Process -Name "npu_wrapper" -ErrorAction SilentlyContinue | Select-Object -First 1)
+}
+
+function Test-ApiHttpUp {
+    param([int]$TimeoutSec = 8)
+    try {
+        $null = Invoke-RestMethod -Uri "$ApiBase/v1/health" -Method Get -TimeoutSec $TimeoutSec -ErrorAction Stop
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Test-BackendChatReady {
+    param([int]$TimeoutSec = 8)
+    try {
+        $h = Invoke-RestMethod -Uri "$ApiBase/v1/health" -Method Get -TimeoutSec $TimeoutSec -ErrorAction Stop
+        if ($null -ne $h.chat_ready -and $h.chat_ready -eq $false) {
+            return $false
+        }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Get-BackendLoadStatusLine {
+    param([int]$ElapsedSec = 0)
+    if (Test-BackendChatReady -TimeoutSec 15) {
+        return $null
+    }
+    if (-not (Test-BackendProcessRunning)) {
+        return "  Backend stopped (${ElapsedSec}s) - see runlog.txt (often low VRAM / weak GPU during first GGUF compile)."
+    }
+    if (Test-ApiHttpUp -TimeoutSec 15) {
+        return "  Compiling model... ${ElapsedSec}s (first run; keep this window open)"
+    }
+    return "  Still compiling... ${ElapsedSec}s (health slow while the device is busy)"
+}
+
+function Get-BackendWaitTimeoutSec {
+    $defaultSec = 360
+    try {
+        $envWait = [string]$env:ACOULM_BACKEND_WAIT_SEC
+        if (-not [string]::IsNullOrWhiteSpace($envWait)) {
+            $parsed = 0
+            if ([int]::TryParse($envWait.Trim(), [ref]$parsed) -and $parsed -gt 0) {
+                return $parsed
+            }
+        }
+    } catch {}
+    return $defaultSec
+}
+
+function Wait-BackendChatReady {
+    param([int]$TimeoutSec = 0)
+    if ($TimeoutSec -le 0) {
+        $TimeoutSec = Get-BackendWaitTimeoutSec
+    }
+    if (Test-BackendChatReady) {
+        return $true
+    }
+
+    $danceFrames = @("[@_@] <|>", "[@_@] \\|/", "[@_@] <|>", "[@_@] /|\\")
+    $t0 = Get-Date
+    $deadline = $t0.AddSeconds($TimeoutSec)
+    $lastProgress = $t0
+    $frame = 0
+    $backendDeadSince = $null
+    $crashMsgShown = $false
+
+    Write-Host ""
+    Write-Host "  Loading model (first run only; next acoulm is instant if backend stays up)..." -ForegroundColor Cyan
+    Write-Dim  "  Press Ctrl+C to cancel."
+
+    while ((Get-Date) -lt $deadline) {
+        if (Test-BackendChatReady) {
+            Write-Host -NoNewline "`r"
+            Write-Host -NoNewline (" " * 64)
+            Write-Host "`r"
+            return $true
+        }
+
+        $now = Get-Date
+        if (-not (Test-BackendProcessRunning)) {
+            if (-not $backendDeadSince) { $backendDeadSince = $now }
+            if (-not $crashMsgShown -and ($now - $backendDeadSince).TotalSeconds -ge 8) {
+                Write-Host ""
+                Write-Host "  Backend exited during first compile (weak GPU / low VRAM is common on 3B GGUF)." -ForegroundColor Red
+                Write-Host "  Try a smaller model, export OpenVINO IR once, or set `$env:ACOULM_DEVICE='CPU' if you need stability." -ForegroundColor DarkYellow
+                $crashMsgShown = $true
+            }
+            if (($now - $backendDeadSince).TotalSeconds -ge 25) {
+                Write-Host -NoNewline "`r"
+                Write-Host -NoNewline (" " * 64)
+                Write-Host "`r"
+                return $false
+            }
+        } else {
+            $backendDeadSince = $null
+        }
+
+        if (($now - $lastProgress).TotalSeconds -ge 10) {
+            $elapsed = [int]($now - $t0).TotalSeconds
+            if ($crashMsgShown) {
+                $lastProgress = $now
+                continue
+            }
+            Write-Host -NoNewline "`r"
+            Write-Host -NoNewline (" " * 72)
+            Write-Host "`r"
+            $line = Get-BackendLoadStatusLine -ElapsedSec $elapsed
+            if ($line) {
+                Write-Host $line -ForegroundColor DarkYellow
+            }
+            $lastProgress = $now
+        }
+
+        Write-Host -NoNewline ("`r  AcouLM " + $danceFrames[$frame % $danceFrames.Count] + "  ")
+        $frame += 1
+        Start-Sleep -Milliseconds 250
+    }
+
+    Write-Host -NoNewline "`r"
+    Write-Host -NoNewline (" " * 64)
+    Write-Host "`r"
+    return $false
+}
+
+# ---------------------------------------------------------------------------
 # AcouLM splash (shown when chat starts)
 # ---------------------------------------------------------------------------
 
@@ -533,52 +666,31 @@ function Show-AcouLMSplash {
     )
     Write-Host ""
 
-    # Keep robot dancing briefly while probing readiness, but do not block chat startup for minutes.
-    $waitSec = 12
-    try {
-        $envWait = [string]$env:ACOULM_BACKEND_WAIT_SEC
-        if (-not [string]::IsNullOrWhiteSpace($envWait)) {
-            $parsed = 0
-            if ([int]::TryParse($envWait.Trim(), [ref]$parsed) -and $parsed -gt 0) {
-                $waitSec = $parsed
-            }
-        }
-    } catch {}
-    $deadline = (Get-Date).AddSeconds($waitSec)
-    $minFrames = 10
-    $maxFrames = [math]::Max($minFrames, [int]($waitSec * 5))
-    $i = 0
-    while ((Get-Date) -lt $deadline) {
-        if (($i % 5) -eq 0) {
-            try {
-                $prefetchedStatus = Invoke-RestMethod -Uri "$ApiBase/v1/cli/status" -Method Get -TimeoutSec 2 -ErrorAction Stop
-            } catch {}
-        }
-        $frame = $danceFrames[$i % $danceFrames.Count]
-        Write-Host -NoNewline ("`r  AcouLM " + $frame + "  ")
-        Start-Sleep -Milliseconds 200
-        $i++
-        if ($null -ne $prefetchedStatus -and $i -ge $minFrames) {
-            break
-        }
-        if ($i -ge $maxFrames) {
-            break
-        }
-    }
-
-    # Erase dance line so it disappears after startup.
-    Write-Host -NoNewline "`r"
-    Write-Host -NoNewline (" " * 64)
-    Write-Host "`r"
-
-    foreach ($line in $art) {
-        Write-Host $line -ForegroundColor Magenta
-    }
-    if ($null -ne $prefetchedStatus) {
-        Write-Host "  [ready] chat is online" -ForegroundColor Magenta
+    if (Test-BackendChatReady) {
+        try {
+            $prefetchedStatus = Invoke-RestMethod -Uri "$ApiBase/v1/cli/status" -Method Get -TimeoutSec 3 -ErrorAction Stop
+        } catch {}
     } else {
-        Write-Host "  [starting] backend is warming up..." -ForegroundColor Magenta
+        foreach ($line in $art) {
+            Write-Host $line -ForegroundColor Magenta
+        }
+        if (-not (Wait-BackendChatReady)) {
+            Write-Host "  [timeout] backend not ready in time" -ForegroundColor Red
+            Write-Dim  "  Check Task Manager for npu_wrapper.exe or run acoulm again after a clean stop."
+            Write-Host ""
+            return $null
+        }
+        try {
+            $prefetchedStatus = Invoke-RestMethod -Uri "$ApiBase/v1/cli/status" -Method Get -TimeoutSec 3 -ErrorAction Stop
+        } catch {}
     }
+
+    if ($null -eq $prefetchedStatus) {
+        foreach ($line in $art) {
+            Write-Host $line -ForegroundColor Magenta
+        }
+    }
+    Write-Host "  [ready] chat is online" -ForegroundColor Magenta
     Write-Host ""
     return $prefetchedStatus
 }
@@ -629,8 +741,36 @@ function Show-MetricsBlock {
 # Core chat call
 # ---------------------------------------------------------------------------
 
+function Wait-ChatInferenceIdle {
+    param([int]$TimeoutSec = 30)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $h = Invoke-RestMethod -Uri "$ApiBase/v1/health" -Method Get -TimeoutSec 2 -ErrorAction Stop
+            if ($null -ne $h.chat_ready -and $h.chat_ready -eq $false) {
+                Start-Sleep -Milliseconds 400
+                continue
+            }
+            if ($h.inference_busy -eq $true) {
+                Start-Sleep -Milliseconds 400
+                continue
+            }
+            return $true
+        } catch {
+            Start-Sleep -Milliseconds 400
+        }
+    }
+    return $false
+}
+
 function Send-ChatMessage {
     param([string]$UserPrompt)
+
+    if (-not (Wait-ChatInferenceIdle -TimeoutSec 45)) {
+        Write-Err "Model is not ready yet (still loading or busy). Wait until chat shows [ready], then try again."
+        Write-Host ""
+        return
+    }
 
     $modelId = "openvino"
     try {
@@ -641,26 +781,48 @@ function Send-ChatMessage {
     $body = @{
         model       = $modelId
         messages    = @(@{ role = "user"; content = $UserPrompt })
-        stream      = $false
-        temperature = 0.3
-        max_tokens  = 256
+        stream      = $true
+        temperature = 0.2
+        max_tokens  = 96
     }
 
-    $sendOnce = {
-        Invoke-RestMethod `
-            -Uri        "$ApiBase/v1/chat/completions" `
-            -Method     Post `
-            -Headers    @{ "Content-Type" = "application/json"; "x-npu-cli" = "true" } `
-            -Body       ($body | ConvertTo-Json -Depth 8 -Compress) `
-            -TimeoutSec 120 `
-            -ErrorAction Stop
+    $sendStream = {
+        $jsonBody = ($body | ConvertTo-Json -Depth 8 -Compress)
+        $req = [System.Net.HttpWebRequest]::Create("$ApiBase/v1/chat/completions")
+        $req.Method = "POST"
+        $req.ContentType = "application/json"
+        $req.Headers.Add("x-npu-cli", "true")
+        $req.Timeout = 120000
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($jsonBody)
+        $req.ContentLength = $bytes.Length
+        $stream = $req.GetRequestStream()
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Close()
+        $resp = $req.GetResponse()
+        $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
+        $full = New-Object System.Text.StringBuilder
+        Write-Host ""
+        while (-not $reader.EndOfStream) {
+            $line = $reader.ReadLine()
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            if (-not $line.StartsWith("data:")) { continue }
+            $payload = $line.Substring(5).Trim()
+            if ($payload -eq "[DONE]") { break }
+            try {
+                $chunk = $payload | ConvertFrom-Json
+                $piece = $chunk.choices[0].delta.content
+                if ($null -ne $piece -and $piece -ne "") {
+                    [void]$full.Append($piece)
+                    Write-Host -NoNewline $piece
+                }
+            } catch {}
+        }
+        Write-Host ""
+        return $full.ToString()
     }
 
     try {
-        $resp = & $sendOnce
-        $content = $resp.choices[0].message.content
-        Write-Host ""
-        Write-Host $content
+        $null = & $sendStream
     } catch {
         if (Test-ConnectionFailure -Exception $_) {
             Write-Host ""
@@ -677,10 +839,7 @@ function Send-ChatMessage {
             }
             if ($ready) {
                 try {
-                    $resp = & $sendOnce
-                    $content = $resp.choices[0].message.content
-                    Write-Host ""
-                    Write-Host $content
+                    $null = & $sendStream
                 } catch {
                     Write-Err (Get-ApiErrorMessage -Exception $_)
                     Write-Host ""
@@ -694,7 +853,11 @@ function Send-ChatMessage {
                 return
             }
         } else {
-            Write-Err (Get-ApiErrorMessage -Exception $_)
+            $msg = Get-ApiErrorMessage -Exception $_
+            Write-Err $msg
+            if ($msg -match 'has_non_finished_requests|ContinuousBatchingPipeline|inference_busy|model_not_ready') {
+                Write-Dim "  Hint: wait a few seconds. Chat is terminal-only (run acoulm). Do not use browser chat at the same time."
+            }
             Write-Host ""
             return
         }
@@ -707,9 +870,24 @@ function Send-ChatMessage {
 # Inline commands recognised during a chat session
 # ---------------------------------------------------------------------------
 
+function Test-IsChatSlashCommand {
+    param([string]$Line)
+    return ($Line.Trim() -match '^[/\\]')
+}
+
+function Get-ChatSlashCommandName {
+    param([string]$Line)
+    $t = $Line.Trim()
+    if ($t -notmatch '^[/\\]') { return $null }
+    return ($t -replace '^[/\\]\s*', '').Trim().ToLower()
+}
+
 function Handle-InlineCommand {
     param([string]$Input)
-    $command = $Input.Trim().ToLower().TrimStart([char[]]('/','\'))
+    if (-not (Test-IsChatSlashCommand -Line $Input)) {
+        return $false
+    }
+    $command = Get-ChatSlashCommandName -Line $Input
 
     switch ($command) {
         "status" {
@@ -725,7 +903,10 @@ function Handle-InlineCommand {
             }
             return $true
         }
-        default { return $false }
+        default {
+            Write-Dim "  Unknown chat command. Only /status and /exit are available."
+            return $true
+        }
     }
 }
 
@@ -737,6 +918,9 @@ function Start-ChatLoop {
     param([string]$InitialPrompt = "")
 
     $prefetchedStatus = Show-AcouLMSplash
+    if ($null -eq $prefetchedStatus) {
+        return
+    }
     Write-Info "Chat"
     if ($null -ne $prefetchedStatus) {
         $device = if ($prefetchedStatus.active_device)  { $prefetchedStatus.active_device }  else { "?" }
@@ -751,8 +935,6 @@ function Start-ChatLoop {
         Write-Dim  "  Type your message and press Enter. Type '/exit' to quit."
         Write-Dim  "  Type '/status' to see current device / model / metrics."
         Write-Info ""
-    } else {
-        Show-RuntimeBanner
     }
 
     # If a prompt was passed on the command line, send it first
@@ -769,8 +951,8 @@ function Start-ChatLoop {
         }
 
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
-        $command = $line.Trim().ToLower().TrimStart([char[]]('/','\'))
-        if ($command -eq "exit") { break }
+        $slashCmd = Get-ChatSlashCommandName -Line $line
+        if ($slashCmd -eq "exit") { break }
 
         if (-not (Handle-InlineCommand -Input $line)) {
             Send-ChatMessage -UserPrompt $line

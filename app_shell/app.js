@@ -97,7 +97,16 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   }
 
   function defaultApiBase() {
-    return "http://localhost:8000/v1";
+    return "http://127.0.0.1:8000/v1";
+  }
+
+  function formatWaitDuration(ms) {
+    const sec = Math.max(1, Math.round(ms / 1000));
+    if (sec < 60) {
+      return `~${sec}s`;
+    }
+    const mins = Math.round(sec / 60);
+    return `~${mins} min`;
   }
 
   function printJson(target, value) {
@@ -116,6 +125,20 @@ if (window.__NPU_APP_SHELL_LOADED__) {
 
   function normalizeDevice(value) {
     return String(value || "").trim().toUpperCase();
+  }
+
+  function deviceOptionLabel(id, availableDevices) {
+    const dev = normalizeDevice(id);
+    if (dev !== "GPU" || !Array.isArray(availableDevices)) {
+      return dev;
+    }
+    const entry = availableDevices.find((d) => normalizeDevice(d?.id || d) === "GPU");
+    const tier = String(entry?.tier || "").toLowerCase();
+    const name = String(entry?.name || "").toLowerCase();
+    if (tier === "integrated" || /uhd|iris|hd graphics|vega/.test(name)) {
+      return "GPU (integrated)";
+    }
+    return dev;
   }
 
   function estimateTokens(text) {
@@ -409,11 +432,11 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   }
 
   const DEFAULT_TUNING = {
-    maxTokens: 256,
+    maxTokens: 128,
     contextCapTokens: 2048,
   };
 
-  const PRESET_DEFAULT = "balanced";
+  const PRESET_DEFAULT = "latency-first";
   const PERFORMANCE_PRESETS = {
     "latency-first": {
       label: "Latency First",
@@ -424,7 +447,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     balanced: {
       label: "Balanced",
       policy: "BALANCED",
-      features: { "split-prefill": true, "context-routing": true, "optimize-memory": true },
+      features: { "split-prefill": false, "context-routing": false, "optimize-memory": true },
       threshold: 80,
     },
     "throughput-first": {
@@ -544,6 +567,12 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   const DEVICE_LOAD_FETCH_TIMEOUT_MS = 600000;
   /** Health probe should fail fast so the UI does not sit in "checking" for a full API timeout. */
   const HEALTH_PROBE_FETCH_TIMEOUT_MS = 3500;
+  /** Manual readiness refresh may wait for model load; bootstrap does not block this long. */
+  const READINESS_WAIT_MAX_MS = 120000;
+  const READINESS_BOOTSTRAP_WAIT_MS = 0;
+  let readinessAutoRetryTimer = null;
+  const READINESS_WAIT_STEP_MS = 1500;
+  const READINESS_FETCH_TIMEOUT_MS = 15000;
 
   function friendlyFetchError(err, baseUrlShown, abortTimeoutMs = API_FETCH_TIMEOUT_MS) {
     const name = err && err.name;
@@ -552,7 +581,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       return `Timed out after ${abortTimeoutMs / 1000}s — no response from ${baseUrlShown}. Check the API base URL and that the stack is running.`;
     }
     if (msg === "Failed to fetch" || /NetworkError|Load failed|ECONNREFUSED/i.test(msg)) {
-      return `Failed to fetch ${baseUrlShown} — nothing answered (start .\start_app.ps1 or acoulm; URL must match the REST API, usually ending in /v1).`;
+      return `Failed to fetch ${baseUrlShown} — nothing answered (run acoulm in a terminal and wait until chat is online; API base should end with /v1).`;
     }
     return msg;
   }
@@ -817,6 +846,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     const loaded = Array.isArray(status?.devices)
       ? [...new Set(status.devices.map((d) => normalizeDevice(d)).filter(Boolean))]
       : [];
+    const availableDevices = Array.isArray(status?.available_devices) ? status.available_devices : [];
 
     const extras = loaded.filter((d) => !STANDARD_DEVICES.includes(d));
     const fullList = [...STANDARD_DEVICES, ...extras];
@@ -839,8 +869,9 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         const option = document.createElement("option");
         option.value = item;
         const isLoaded = item === "AUTO" || loaded.includes(item);
-        option.textContent = item;
-        option.title = isLoaded ? `${item} (loaded)` : `${item} — will be loaded on first use`;
+        const label = deviceOptionLabel(item, availableDevices);
+        option.textContent = label;
+        option.title = isLoaded ? `${label} (loaded)` : `${label} — will be loaded on first use`;
         node.appendChild(option);
       }
 
@@ -1630,7 +1661,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
 
   function showRestartRequired(outputEl, note) {
     if (!outputEl) return;
-    const line = note || "Applies on next stack restart (.\\start_app.ps1).";
+    const line = note || "Applies on next stack restart (acoulm).";
     appendText(outputEl, `\n\n${line}`);
   }
 
@@ -1818,7 +1849,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       });
       printJson(output, result);
       addActivity(`Auto model select ${enabled ? "enabled" : "disabled"} (applies on next launch)`, "ready");
-      setFeatureConfirmation(`Auto model select ${enabled ? "enabled" : "disabled"}. Restart via acoulm/start_app to apply.`);
+      setFeatureConfirmation(`Auto model select ${enabled ? "enabled" : "disabled"}. Restart via acoulm to apply.`);
       await refreshStatus();
     } catch (err) {
       output.textContent = String(err.message || err);
@@ -2172,7 +2203,6 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       const modelId = await getChatModelId();
       const resp = await requestJson("/chat/completions", {
         method: "POST",
-        headers: { "x-npu-cli": "true" },
         timeoutMs: CHAT_COMPLETION_FETCH_TIMEOUT_MS,
         body: JSON.stringify({
           model: modelId,
@@ -2193,9 +2223,13 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       });
       addActivity("Chat reply received", "ready");
     } catch (err) {
-      output.textContent += `[${nowStamp()}] Error: ${String(err.message || err)}\n`;
-      void sendTelemetryEvent("chat_error", { error_kind: String(err.message || err).slice(0, 120) });
-      addActivity(`Chat failed: ${String(err.message || err)}`, "error");
+      let errLine = String(err.message || err);
+      if (/terminal.?only|terminal_chat_only|403/i.test(errLine)) {
+        errLine = "Chat is terminal-only. Run acoulm in PowerShell and type your message there.";
+      }
+      output.textContent += `[${nowStamp()}] Error: ${errLine}\n`;
+      void sendTelemetryEvent("chat_error", { error_kind: errLine.slice(0, 120) });
+      addActivity(`Chat failed: ${errLine}`, "error");
     } finally {
       isChatBusy = false;
       setButtonBusy("btnSendChat", false);
@@ -2246,7 +2280,6 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       const modelId = await getChatModelId();
       const resp = await requestJson("/chat/completions", {
         method: "POST",
-        headers: { "x-npu-cli": "true" },
         timeoutMs: CHAT_COMPLETION_FETCH_TIMEOUT_MS,
         body: JSON.stringify({
           model: modelId,
@@ -2774,11 +2807,135 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     return lines;
   }
 
-  async function refreshReadinessUI() {
+  async function fetchHealthProbe() {
+    try {
+      return await requestJson(
+        "/health",
+        { method: "GET", timeoutMs: HEALTH_PROBE_FETCH_TIMEOUT_MS },
+        false
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  async function waitForApiReachable(maxMs = READINESS_WAIT_MAX_MS) {
+    if (maxMs <= 0) {
+      const h = await fetchHealthProbe();
+      return h != null;
+    }
+    const deadline = Date.now() + maxMs;
+    while (Date.now() < deadline) {
+      const h = await fetchHealthProbe();
+      if (h) {
+        if (h.chat_ready === false) {
+          setConnectionState("checking", "loading model");
+        }
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, READINESS_WAIT_STEP_MS));
+    }
+    return false;
+  }
+
+  async function waitForChatReady(maxMs = READINESS_WAIT_MAX_MS) {
+    const deadline = Date.now() + maxMs;
+    while (Date.now() < deadline) {
+      const h = await fetchHealthProbe();
+      if (h && h.chat_ready !== false) {
+        setConnectionState("online", "");
+        return true;
+      }
+      if (h && h.chat_ready === false) {
+        setConnectionState("checking", "loading model");
+      }
+      await new Promise((resolve) => setTimeout(resolve, READINESS_WAIT_STEP_MS));
+    }
+    return false;
+  }
+
+  function stopReadinessAutoRetry() {
+    if (readinessAutoRetryTimer) {
+      clearInterval(readinessAutoRetryTimer);
+      readinessAutoRetryTimer = null;
+    }
+  }
+
+  function startReadinessAutoRetry() {
+    if (readinessAutoRetryTimer) {
+      return;
+    }
+    readinessAutoRetryTimer = setInterval(() => {
+      void (async () => {
+        const h = await fetchHealthProbe();
+        if (!h) {
+          return;
+        }
+        if (h.chat_ready === false) {
+          setConnectionState("checking", "loading model");
+          return;
+        }
+        stopReadinessAutoRetry();
+        setConnectionState("online", "");
+        await refreshReadinessUI({ maxWaitMs: 15000, fromAutoRetry: true });
+      })();
+    }, 4000);
+  }
+
+  async function refreshReadinessUI(options = {}) {
+    const waitMs =
+      typeof options.maxWaitMs === "number" && options.maxWaitMs >= 0
+        ? options.maxWaitMs
+        : READINESS_WAIT_MAX_MS;
+    const softStart = options.softStart === true;
     const out = el("readinessOutput");
     const sum = el("readinessSummary");
     try {
-      const data = await requestJson("/cli/readiness", { method: "GET" });
+      if (sum && waitMs > 0) {
+        sum.textContent = "";
+        const waiting = document.createElement("div");
+        waiting.className = "readiness-summary-row";
+        waiting.textContent =
+          waitMs >= READINESS_WAIT_MAX_MS
+            ? "Waiting for API (run acoulm if needed; model compile can take several minutes)…"
+            : "Checking API…";
+        sum.appendChild(waiting);
+      } else if (sum && softStart) {
+        sum.textContent = "";
+        const waiting = document.createElement("div");
+        waiting.className = "readiness-summary-row";
+        waiting.textContent =
+          "API still starting (first model load can take several minutes). Run acoulm in a terminal; this panel will refresh when the API is up.";
+        sum.appendChild(waiting);
+      }
+      const apiUp = await waitForApiReachable(waitMs);
+      if (!apiUp) {
+        if (softStart) {
+          if (out) {
+            out.textContent =
+              "Waiting for backend at " +
+              baseUrl() +
+              " …\n\nRun acoulm in PowerShell and wait until terminal chat shows [ready].";
+          }
+          startReadinessAutoRetry();
+          setSystemFeedback(
+            "Backend still loading — readiness will update automatically.",
+            "busy"
+          );
+          return;
+        }
+        throw new Error(
+          `API not reachable at ${baseUrl()} after ${formatWaitDuration(waitMs)}. Run acoulm, wait until terminal chat shows [ready], then click Refresh readiness.`
+        );
+      }
+      stopReadinessAutoRetry();
+      if (sum) {
+        sum.textContent = "";
+      }
+      const data = await requestJson("/cli/readiness", {
+        method: "GET",
+        timeoutMs: READINESS_FETCH_TIMEOUT_MS,
+      });
       printJson(out, data);
       if (sum) {
         sum.textContent = "";
@@ -2830,7 +2987,9 @@ if (window.__NPU_APP_SHELL_LOADED__) {
           row("Last error log", "(none)");
         }
       }
-      setSystemFeedback("Readiness refreshed.", "ok");
+      if (!options.fromAutoRetry) {
+        setSystemFeedback("Readiness refreshed.", "ok");
+      }
     } catch (err) {
       const msg = String(err.message || err);
       if (out) {
@@ -2846,7 +3005,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         hint.className = "hint";
         hint.style.marginTop = "8px";
         hint.textContent =
-          "Readiness is fetched from the API base URL at the top of this page (same host as /v1/chat/completions). Start the stack (e.g. .\\start_app.ps1 or acoulm), then refresh.";
+          "Check the API base URL at the top of this page (should be http://127.0.0.1:8000/v1). Run acoulm, wait until terminal chat shows [ready], then click Refresh readiness.";
         sum.appendChild(hint);
       }
       setSystemFeedback(`Readiness failed: ${msg}`, "error");
@@ -2992,14 +3151,37 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     "In one short phrase, name a color.",
   ];
 
+  // ~130 estimated tokens — enough for context-routing (not the short-prompt path) without a huge prefill.
   const TOGGLE_BENCH_PROMPT =
-    "Write five concise bullet points about why local LLM inference can improve privacy.";
+    "For an enterprise security brief, write four bullet points on why local LLM inference improves privacy: " +
+    "(1) data residency and on-prem prompts, (2) reduced third-party API exposure, (3) on-device control and " +
+    "air-gapped options, (4) auditability for regulated industries. Add two sentences on predictable latency " +
+    "when embeddings stay on local accelerators. End with one sentence on when GPU prefill plus NPU or GPU " +
+    "decode improves throughput versus cloud-only APIs.";
+
+  let benchToggleLastFeatureState = null;
 
   function readBenchToggleParams() {
-    const w = Math.max(0, Math.min(5, Number.parseInt(String(el("benchToggleWarmup")?.value || "1"), 10) || 0));
-    const t = Math.max(1, Math.min(20, Number.parseInt(String(el("benchToggleTimed")?.value || "4"), 10) || 4));
-    const m = Math.max(16, Math.min(2048, Number.parseInt(String(el("benchToggleMaxTok")?.value || "128"), 10) || 128));
+    const w = Math.max(0, Math.min(5, Number.parseInt(String(el("benchToggleWarmup")?.value || "0"), 10) || 0));
+    const t = Math.max(1, Math.min(20, Number.parseInt(String(el("benchToggleTimed")?.value || "3"), 10) || 3));
+    const m = Math.max(16, Math.min(2048, Number.parseInt(String(el("benchToggleMaxTok")?.value || "64"), 10) || 64));
     return { warmupRuns: w, timedRuns: t, maxTokens: m };
+  }
+
+  function countToggleBenchInferences(warmupRuns, timedRuns) {
+    return 2 * warmupRuns + 2 * timedRuns;
+  }
+
+  function estimateToggleBenchLabel(warmupRuns, timedRuns, maxTokens) {
+    const n = countToggleBenchInferences(warmupRuns, timedRuns);
+    const secPerRun = Math.max(6, Math.round(maxTokens / 2.2) + 6);
+    const mins = Math.max(1, Math.ceil((n * secPerRun) / 60));
+    return `~${n} completions, est. ${mins}–${mins + 2} min on GPU`;
+  }
+
+  function setToggleBenchProgress(message) {
+    const noteEl = el("toggleBenchmarkNote");
+    if (noteEl) noteEl.textContent = message;
   }
 
   function captureFeatureToggleState() {
@@ -3208,22 +3390,16 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     const wallMs = performance.now() - t0;
     let m = {};
     try {
-      m = await requestJson("/cli/metrics?mode=last", { method: "GET" });
+      m = await requestJson("/cli/metrics?mode=last", { method: "GET", timeoutMs: 8000 });
     } catch {
       m = {};
     }
-    let s = {};
-    try {
-      s = await requestJson("/cli/status", { method: "GET" });
-    } catch {
-      s = {};
-    }
-    const tpsRaw = m.throughput_tok_s ?? m.throughput ?? s.throughput;
+    const tpsRaw = m.throughput_tok_s ?? m.throughput;
     const tps = Number.isFinite(Number(tpsRaw)) ? Number(tpsRaw) : null;
     return {
       wallMs,
-      ttft: m.ttft_ms ?? s.ttft_ms,
-      tpot: m.tpot_ms ?? s.tpot_ms,
+      ttft: m.ttft_ms,
+      tpot: m.tpot_ms,
       tps,
       note: "ok",
     };
@@ -3231,16 +3407,32 @@ if (window.__NPU_APP_SHELL_LOADED__) {
 
   async function applyToggleBenchFeatureState(opts) {
     const { splitPrefill, contextRouting, optimizeMemory = false } = opts;
+    const target = {
+      splitPrefill: Boolean(splitPrefill),
+      contextRouting: Boolean(contextRouting),
+      optimizeMemory: Boolean(optimizeMemory),
+    };
+    if (
+      benchToggleLastFeatureState &&
+      benchToggleLastFeatureState.splitPrefill === target.splitPrefill &&
+      benchToggleLastFeatureState.contextRouting === target.contextRouting &&
+      benchToggleLastFeatureState.optimizeMemory === target.optimizeMemory
+    ) {
+      return { notes: [] };
+    }
+
     const notes = [];
-    const splitResult = await trySetFeatureBench("split-prefill", splitPrefill);
-    await trySetFeatureBench("context-routing", contextRouting);
-    await trySetFeatureBench("optimize-memory", optimizeMemory);
-    if (splitPrefill && !splitResult.ok) {
+    const splitResult = await trySetFeatureBench("split-prefill", target.splitPrefill);
+    await trySetFeatureBench("context-routing", target.contextRouting);
+    await trySetFeatureBench("optimize-memory", target.optimizeMemory);
+    if (target.splitPrefill && !splitResult.ok) {
       notes.push(`split-prefill: ${splitResult.error || "failed"} (continuing with split-prefill off).`);
       await trySetFeatureBench("split-prefill", false);
+      target.splitPrefill = false;
     }
+    benchToggleLastFeatureState = { ...target };
     try {
-      await requestJson("/cli/metrics?mode=clear", { method: "GET" });
+      await requestJson("/cli/metrics?mode=clear", { method: "GET", timeoutMs: 5000 });
     } catch {
       // ignore
     }
@@ -3455,14 +3647,26 @@ if (window.__NPU_APP_SHELL_LOADED__) {
 
   async function runToggleBenchmarkSuite() {
     const snap = captureFeatureToggleState();
+    benchToggleLastFeatureState = null;
     let completedOk = false;
     setButtonBusy("btnToggleBenchmark", true);
     const noteEl = el("toggleBenchmarkNote");
     const wrap = el("toggleBenchmarkWrap");
     if (wrap) wrap.textContent = "";
-    if (noteEl) noteEl.textContent = "Running feature compare…";
     try {
       const { warmupRuns, timedRuns, maxTokens } = readBenchToggleParams();
+      const totalSteps = countToggleBenchInferences(warmupRuns, timedRuns);
+      let step = 0;
+      const bumpProgress = (label) => {
+        step += 1;
+        setToggleBenchProgress(
+          `Feature compare ${step}/${totalSteps}: ${label} (${estimateToggleBenchLabel(warmupRuns, timedRuns, maxTokens)})`
+        );
+      };
+
+      setToggleBenchProgress(
+        `Starting feature compare (${estimateToggleBenchLabel(warmupRuns, timedRuns, maxTokens)})…`
+      );
       const modelId = await getChatModelId();
 
       const allNotes = [];
@@ -3470,12 +3674,14 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       const { notes: wn1 } = await applyToggleBenchFeatureState({ splitPrefill: true, contextRouting: true });
       allNotes.push(...wn1);
       for (let i = 0; i < warmupRuns; i += 1) {
+        bumpProgress(`warmup AcouLM ${i + 1}/${warmupRuns}`);
         await runOneToggleBenchInference(TOGGLE_BENCH_PROMPT, maxTokens, modelId);
       }
 
       const { notes: wn2 } = await applyToggleBenchFeatureState({ splitPrefill: false, contextRouting: false });
       allNotes.push(...wn2);
       for (let i = 0; i < warmupRuns; i += 1) {
+        bumpProgress(`warmup baseline ${i + 1}/${warmupRuns}`);
         await runOneToggleBenchInference(TOGGLE_BENCH_PROMPT, maxTokens, modelId);
       }
 
@@ -3488,6 +3694,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         if (enabledFirst) {
           const { notes: n1 } = await applyToggleBenchFeatureState({ splitPrefill: true, contextRouting: true });
           allNotes.push(...n1);
+          bumpProgress(`timed ${runIndex}/${timedRuns} AcouLM`);
           const rE = await runOneToggleBenchInference(TOGGLE_BENCH_PROMPT, maxTokens, modelId);
           enabledRows.push({
             scenario: "acoulm_enabled",
@@ -3501,6 +3708,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
 
           const { notes: n2 } = await applyToggleBenchFeatureState({ splitPrefill: false, contextRouting: false });
           allNotes.push(...n2);
+          bumpProgress(`timed ${runIndex}/${timedRuns} baseline`);
           const rB = await runOneToggleBenchInference(TOGGLE_BENCH_PROMPT, maxTokens, modelId);
           baselineRows.push({
             scenario: "baseline_single_path",
@@ -3514,6 +3722,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
         } else {
           const { notes: n3 } = await applyToggleBenchFeatureState({ splitPrefill: false, contextRouting: false });
           allNotes.push(...n3);
+          bumpProgress(`timed ${runIndex}/${timedRuns} baseline`);
           const rB2 = await runOneToggleBenchInference(TOGGLE_BENCH_PROMPT, maxTokens, modelId);
           baselineRows.push({
             scenario: "baseline_single_path",
@@ -3527,6 +3736,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
 
           const { notes: n4 } = await applyToggleBenchFeatureState({ splitPrefill: true, contextRouting: true });
           allNotes.push(...n4);
+          bumpProgress(`timed ${runIndex}/${timedRuns} AcouLM`);
           const rE2 = await runOneToggleBenchInference(TOGGLE_BENCH_PROMPT, maxTokens, modelId);
           enabledRows.push({
             scenario: "acoulm_enabled",
@@ -3592,6 +3802,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       setSystemFeedback(`Feature compare failed: ${m}`, "error");
       addActivity(`Feature compare failed: ${m}`, "error");
     } finally {
+      benchToggleLastFeatureState = null;
       await restoreFeatureTogglesFromSnapshot(snap).catch(() => {});
       await refreshStatus().catch(() => {});
       const ne = el("toggleBenchmarkNote");
@@ -3992,7 +4203,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     });
 
     on("refreshReadiness", "click", () => {
-      void refreshReadinessUI();
+      void refreshReadinessUI({ maxWaitMs: READINESS_WAIT_MAX_MS });
     });
     on("btnRestartStack", "click", () => {
       void restartFullStack();
@@ -4040,7 +4251,10 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     startPerformancePolling();
     bootstrap()
       .then(() =>
-        Promise.all([loadDiscoverList(), refreshReadinessUI()]).catch(() => {
+        Promise.all([
+          loadDiscoverList(),
+          refreshReadinessUI({ maxWaitMs: READINESS_BOOTSTRAP_WAIT_MS, softStart: true }),
+        ]).catch(() => {
           // Best-effort; main panels already show bootstrap errors.
         })
       )

@@ -61,6 +61,10 @@ telemetry/
 # Registry JSON is machine-specific (paths, selections). Commit only *.example.json templates.
 registry/*.json
 !registry/*.example.json
+!registry/*.linux.example.json
+
+# Per-site HPC secrets/paths (never commit)
+scripts/hpc/local_env.sh
 *.bak
 
 # OpenWebUI runtime secret (auto-generated, do not commit)

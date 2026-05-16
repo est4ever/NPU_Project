@@ -1,5 +1,6 @@
 #pragma once
 #include "../OpenVINO/Backend/BackendPool.h"
+#include "../OpenVINO/Scheduler/IScheduler.h"
 #include "RuntimeConfig.h"
 #include <string>
 #include <memory>
@@ -22,6 +23,13 @@ public:
     RestAPIServer(BackendPool* pool, int port = 8080);
     RestAPIServer(BackendPool* pool, RuntimeConfig* config, int port = 8080);
     RestAPIServer(BackendPool* pool, RuntimeConfig* config, KVCacheMonitor* kv_monitor, int port = 8080);
+    RestAPIServer(
+        BackendPool* pool,
+        RuntimeConfig* config,
+        KVCacheMonitor* kv_monitor,
+        IScheduler* scheduler,
+        int port = 8080
+    );
     ~RestAPIServer();
 
     // Start the server (blocking call - run in separate thread)
@@ -33,14 +41,22 @@ public:
     // Check if server is running
     bool is_running() const;
 
+    // True after bind_to_port succeeds (HTTP probes can connect; model may still be loading).
+    bool is_listening() const;
+
+    // Block until the server has bound to port_ or timeout_ms elapses.
+    bool wait_until_listening(int timeout_ms = 60000) const;
+
 private:
     BackendPool* backend_pool_;
     RuntimeConfig default_config_;
     RuntimeConfig* config_;
     KVCacheMonitor* kv_monitor_;
+    IScheduler* scheduler_;
     std::unique_ptr<httplib::Server> server_;
     int port_;
     std::atomic<bool> running_;
+    std::atomic<bool> listening_;
 
     // Handler for /v1/chat/completions endpoint (pure chat only - no commands)
     void handle_chat_completions(const class httplib::Request& req, class httplib::Response& res);

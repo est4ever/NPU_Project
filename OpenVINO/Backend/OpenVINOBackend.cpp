@@ -1,9 +1,11 @@
 #include "OpenVINOBackend.h"
+#include "../../src/platform_util.h"
 #include <iostream>
 #include <type_traits>
 #include <utility>
 #include <vector>
 #include <cstdlib>
+#include <filesystem>
 #include <openvino/genai/text_streamer.hpp>
 
 namespace {
@@ -128,56 +130,122 @@ std::optional<std::vector<int64_t>> extract_generated_ids(const T& result) {
     }
     return std::nullopt;
 }
-} // namespace
 
-void OpenVINOBackend::load_model(const std::string& model_path, const std::string& device) {
-    std::cout << "[Backend] Loading model from: " << model_path <<  " to " << device << "...\n";
-    
-    ov::AnyMap pipeline_config;
-    
-    // Advanced KV-Cache Configuration
-    std::cout << "[Backend] Enabling INT8 KV-cache quantization for memory efficiency...\n";
-    pipeline_config["KV_CACHE_PRECISION"] = "u8";  // INT8 quantization (2x memory savings)
-    
-    // Enable dynamic quantization for KV-cache
-    pipeline_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"] = 32;
-    
-    // Device-specific optimizations
-    if (device == "NPU") {
-        pipeline_config["CACHE_DIR"] = "./npu_cache";
-        pipeline_config["GENERATE_HINT"] = "BEST_PERF";
-        pipeline_config["NPU_USE_NPUW"] = true;  // NPU Weight Upload optimization
-        
-        std::cout << "[Backend] NPU optimizations: cache dir, best perf hint, NPUW enabled\n";
-    } else if (device == "GPU") {
-        // GPU-specific optimizations for KV-cache
-        pipeline_config["GPU_ENABLE_SDPA_OPTIMIZATION"] = true;
-        pipeline_config["CACHE_DIR"] = "./gpu_cache";
-        
-        std::cout << "[Backend] GPU optimizations: SDPA optimization, cache enabled\n";
-    } else if (device == "CPU") {
-        // Keep CPU config minimal for plugin compatibility across OpenVINO versions.
-        pipeline_config["NUM_STREAMS"] = 1;
-        std::cout << "[Backend] CPU optimizations: default threading\n";
+std::string sanitize_cache_token(std::string token) {
+    for (char& c : token) {
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                        (c >= '0' && c <= '9') || c == '-' || c == '_';
+        if (!ok) {
+            c = '_';
+        }
     }
-    
-    // Universal optimizations (policy-aware via env set by launcher/runtime path)
+    if (token.empty()) {
+        token = "model";
+    }
+    return token;
+}
+
+std::string resolve_cache_dir(const std::string& device, const std::string& model_path) {
+    const char* home = std::getenv("ACOULM_HOME");
+    std::filesystem::path base = home && home[0] ? std::filesystem::path(home) : std::filesystem::current_path();
+    const std::string root = device == "NPU" ? "npu_cache" : "gpu_cache";
+    std::string leaf = sanitize_cache_token(std::filesystem::path(model_path).stem().string());
+    std::filesystem::path dir = base / root / leaf;
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const std::string path = dir.string();
+    if (root == "gpu_cache") {
+        acoulm::set_env_var("OV_CACHE_DIR", path);
+    }
+    return path;
+}
+
+bool fast_load_enabled() {
+    const char* v = std::getenv("ACOULM_FAST_LOAD");
+    return v && v[0] == '1';
+}
+
+ov::AnyMap build_pipeline_config(const std::string& device, bool minimal_cpu, const std::string& model_path) {
+    ov::AnyMap pipeline_config;
+
+    const bool fast_load = fast_load_enabled();
+    if (!minimal_cpu && !fast_load) {
+        pipeline_config["KV_CACHE_PRECISION"] = "u8";
+        pipeline_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"] = 32;
+    }
+
+    if (device == "NPU") {
+        pipeline_config["CACHE_DIR"] = resolve_cache_dir(device, model_path);
+        pipeline_config["GENERATE_HINT"] = "BEST_PERF";
+        pipeline_config["NPU_USE_NPUW"] = true;
+    } else if (device == "GPU") {
+        pipeline_config["GPU_ENABLE_SDPA_OPTIMIZATION"] = true;
+        pipeline_config["CACHE_DIR"] = resolve_cache_dir(device, model_path);
+        pipeline_config["NUM_STREAMS"] = 1;
+    } else if (device == "CPU") {
+        pipeline_config["NUM_STREAMS"] = 1;
+    }
+
     const char* perfMode = std::getenv("ACOULM_PERF_MODE");
     const std::string perfModeStr = perfMode ? perfMode : "";
     if (perfModeStr == "balanced-performance") {
         pipeline_config["PERFORMANCE_HINT"] = "THROUGHPUT";
-        std::cout << "[Backend] Performance profile: balanced-performance (throughput-oriented hint)\n";
-    } else if (perfModeStr == "latency-first") {
-        pipeline_config["PERFORMANCE_HINT"] = "LATENCY";
-        std::cout << "[Backend] Performance profile: latency-first\n";
     } else {
         pipeline_config["PERFORMANCE_HINT"] = "LATENCY";
     }
-    
-    std::cout << "[Backend] Global: INT8 KV-cache, latency-optimized\n";
 
-    pipe = std::make_unique<ov::genai::LLMPipeline>(model_path, device, pipeline_config);
-    std::cout << "[Backend] Model loaded successfully with advanced KV-cache config.\n";
+    return pipeline_config;
+}
+
+} // namespace
+
+void OpenVINOBackend::load_model(const std::string& model_path, const std::string& device) {
+    std::cout << "[Backend] Loading model from: " << model_path << " to " << device << "...\n";
+    if (device == "GPU" || device == "NPU") {
+        std::cout << "[Backend] Compile cache: " << resolve_cache_dir(device, model_path) << "\n";
+    }
+    if (fast_load_enabled()) {
+        std::cout << "[Backend] ACOULM_FAST_LOAD=1 (skipping extra KV quant for faster first compile)\n";
+    }
+
+    const auto attempt_load = [&](const ov::AnyMap& pipeline_config, const char* label) {
+        std::cout << "[Backend] Load attempt (" << label << ") on " << device << "\n";
+        pipe = std::make_unique<ov::genai::LLMPipeline>(model_path, device, pipeline_config);
+    };
+
+    std::exception_ptr first_error;
+    try {
+        if (device == "CPU") {
+            std::cout << "[Backend] CPU: using minimal plugin config first (best compatibility).\n";
+            attempt_load(build_pipeline_config(device, true, model_path), "cpu-minimal");
+        } else {
+            if (!fast_load_enabled()) {
+                std::cout << "[Backend] Enabling INT8 KV-cache quantization for memory efficiency...\n";
+            }
+            attempt_load(build_pipeline_config(device, false, model_path), "default");
+        }
+        std::cout << "[Backend] Model loaded successfully on " << device << ".\n";
+        return;
+    } catch (...) {
+        first_error = std::current_exception();
+    }
+
+    if (device == "CPU") {
+        try {
+            std::cout << "[Backend] CPU minimal load failed; retrying with full KV-cache config...\n";
+            attempt_load(build_pipeline_config(device, false, model_path), "cpu-full");
+            std::cout << "[Backend] Model loaded successfully on CPU (full config).\n";
+            return;
+        } catch (const std::exception& retry_e) {
+            std::cerr << "[Backend] CPU full-config retry failed: " << retry_e.what() << "\n";
+        } catch (...) {
+            std::cerr << "[Backend] CPU full-config retry failed with unknown error.\n";
+        }
+    }
+
+    if (first_error) {
+        std::rethrow_exception(first_error);
+    }
 }
 
 void OpenVINOBackend::generate_stream(const std::string& prompt) {
@@ -185,6 +253,8 @@ void OpenVINOBackend::generate_stream(const std::string& prompt) {
         std::cerr << "Error: Engine tried to generate, but no model is loaded.\n";
         return;
     }
+
+    std::lock_guard<std::mutex> lock(inference_mutex_);
 
     std::cout << "Assistant: ";
 
@@ -242,6 +312,8 @@ GeneratedOutput OpenVINOBackend::generate_output(
         std::cerr << "Error: Engine tried to generate, but no model is loaded.\n";
         return output;
     }
+
+    std::lock_guard<std::mutex> lock(inference_mutex_);
 
     ov::genai::GenerationConfig cfg;
     cfg.max_new_tokens = max_new_tokens;

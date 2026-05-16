@@ -68,8 +68,8 @@
       <p class="hint" id="chatDeviceAvailability">Loaded devices: -</p>
 
       <p class="hint chat-dual-hint">
-        Terminal chat. One-time setup: run <kbd>.\portable_setup.ps1 -NoLaunch</kbd> from the AcouLM folder. After that, just type <kbd>acoulm</kbd> (from any folder) to start the UI + API and open the robot chat.
-        Optional speed: run <kbd>.\start_app.ps1 -PerformanceMode</kbd> once to persist a faster default.
+        Terminal chat. One-time setup: <kbd>acoulm setup</kbd> from the AcouLM folder. After that, type <kbd>acoulm</kbd> (from any folder) to start the UI + API and open chat.
+        Daily use: run <kbd>acoulm</kbd> in a terminal (device, policy, and features are in this panel).
       </p>
       <pre id="chatOutput" class="output chat-transcript" aria-live="polite" style="display: none;"></pre>
       <div class="chat-input-row" style="display: none;">
@@ -217,16 +217,16 @@
       </div>
       <div id="benchmarkTableWrap" class="bench-wrap"></div>
       <h3 class="subpanel-title">Feature compare (AcouLM vs baseline)</h3>
-      <p class="hint">Same sequence as <kbd>.\benchmark_acoulm_toggle.ps1</kbd> (use <kbd>-PairedInterleaved</kbd> there for the same interleaved design the panel uses). Tries split-prefill + context-routing + optimize-memory, then a baseline with those off, on one fixed prompt. Your feature toggles are restored when the run finishes. If split-prefill cannot enable (for example HTTP 409), the run continues with split-prefill off. If the <strong>Note</strong> column shows chat errors, fix the selected model and backend first — averages and A/B stats only count successful completions.</p>
+      <p class="hint">Compares <strong>split-prefill + context-routing</strong> against a baseline with those off. Defaults target ~6 completions (~3–6 min on GPU); raise timed runs or max tokens for a stricter test. Toggles restore when the run finishes.</p>
       <div class="row bench-toggle-row">
         <label>Warmup runs
-          <input id="benchToggleWarmup" type="number" min="0" max="5" value="1" />
+          <input id="benchToggleWarmup" type="number" min="0" max="5" value="0" />
         </label>
         <label>Timed runs
-          <input id="benchToggleTimed" type="number" min="1" max="20" value="4" />
+          <input id="benchToggleTimed" type="number" min="1" max="20" value="3" />
         </label>
         <label>Max tokens
-          <input id="benchToggleMaxTok" type="number" min="16" max="2048" value="128" />
+          <input id="benchToggleMaxTok" type="number" min="16" max="2048" value="64" />
         </label>
         <button id="btnToggleBenchmark" type="button" class="ghost">Run feature compare</button>
       </div>
@@ -280,7 +280,7 @@
         </label>
         <button id="saveAutoModelSelect" class="ghost" type="button">Save</button>
       </div>
-      <p class="hint">This setting applies the next time the stack is started by <strong>acoulm</strong> / <strong>start_app.ps1</strong>.</p>
+      <p class="hint">This setting applies the next time the stack is started by <strong>acoulm</strong>.</p>
 
       <div class="row">
         <label>Threshold <input id="thresholdInput" type="number" min="1" step="1" value="80" /></label>
@@ -350,10 +350,10 @@
             <strong>type: external</strong> — <code>run.ps1</code> does not load OpenVINO setup; it runs <strong>entrypoint</strong> with the usual arguments (model path, <code>--server</code>, <code>--port</code>, …). Use any self-contained server you install. For this UI and <code>npu_cli.ps1</code> to work unchanged, that process should expose the same HTTP API as <code>npu_wrapper</code> (for example <code>/v1/chat/completions</code>, <code>/v1/cli/status</code>). A bare CLI will not satisfy that unless you wrap it.
           </div>
           <div class="mode-item">
-            <strong>Select Backend</strong> updates the registry and triggers an API restart: the current server exits and <code>run.ps1</code> starts again with the new <strong>entrypoint</strong>. The first successful server start writes <code>registry/npu_launch_state.json</code> (local, not in git); without it, restart from the browser fails until you start the stack once via <code>start_app.ps1</code> or <code>run.ps1 ... --server</code>.
+            <strong>Select Backend</strong> updates the registry and triggers an API restart: the current server exits and the backend starts again with the new <strong>entrypoint</strong>. The first successful server start writes <code>registry/npu_launch_state.json</code> (local, not in git); without it, restart from the browser fails until you run <code>acoulm</code> once.
           </div>
           <div class="mode-item">
-            <strong>If chat or status fails to connect:</strong> nothing may be listening on port 8000 yet, or the API is still restarting after a model/backend switch. Wait a few seconds, click <strong>Refresh Status</strong>, run <code>start_app.ps1</code>, or check the PowerShell window running <code>run.ps1</code> for a bad entrypoint, crash on load, or wrong port.
+            <strong>If chat or status fails to connect:</strong> nothing may be listening on port 8000 yet, or the API is still restarting after a model/backend switch. Wait a few seconds, click <strong>Refresh Status</strong>, or run <code>acoulm</code> in a terminal and wait for the model to load.
           </div>
         </div>
       </details>

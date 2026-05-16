@@ -11,6 +11,7 @@ struct RuntimeConfig {
     std::atomic<bool> split_prefill{false};
     std::atomic<bool> context_routing{false};
     std::atomic<bool> enable_kv_paging{false};
+    std::atomic<bool> use_prefill_device{false};
     std::atomic<int> prefill_threshold_high{50};
     std::atomic<int> prefill_threshold_low{40};
     std::atomic<EnginePolicy> policy{EnginePolicy::BALANCED};
@@ -26,6 +27,7 @@ struct RuntimeConfig {
     bool get_split_prefill() const { return split_prefill.load(); }
     bool get_context_routing() const { return context_routing.load(); }
     bool get_enable_kv_paging() const { return enable_kv_paging.load(); }
+    bool get_use_prefill_device() const { return use_prefill_device.load(); }
     int get_prefill_threshold_high() const { return prefill_threshold_high.load(); }
     int get_prefill_threshold_low() const { return prefill_threshold_low.load(); }
     EnginePolicy get_policy() const { return policy.load(); }
@@ -35,6 +37,7 @@ struct RuntimeConfig {
     void set_split_prefill(bool val) { split_prefill.store(val); }
     void set_context_routing(bool val) { context_routing.store(val); }
     void set_enable_kv_paging(bool val) { enable_kv_paging.store(val); }
+    void set_use_prefill_device(bool val) { use_prefill_device.store(val); }
     void set_prefill_threshold_high(int val) { prefill_threshold_high.store(val); }
     void set_prefill_threshold_low(int val) { prefill_threshold_low.store(val); }
     void set_policy(EnginePolicy val) { policy.store(val); }
