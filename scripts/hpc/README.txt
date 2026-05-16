@@ -3,8 +3,10 @@ AcouLM on a remote supercomputer (Linux + SLURM)
 
 1) git clone https://github.com/est4ever/AcouLM.git && cd AcouLM
 
-2) ./hpc-setup.sh
-   (creates registry/*.json from examples, chmod +x scripts)
+2) bash scripts/hpc/linux_setup.sh
+   (like portable_setup.ps1 on Windows: registry + optional model download)
+
+   Or: ./hpc-setup.sh only (config files, no model download)
 
 3) cp scripts/hpc/local_env.example.sh scripts/hpc/local_env.sh
    Edit OPENVINO_GENAI_DIR and ACOULM_MODEL (model on scratch).

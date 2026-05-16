@@ -15,9 +15,9 @@ You can run AcouLM with the built-in OpenVINO backend (`npu_wrapper`) or an exte
 After `git push`, on the cluster:
 
 ```bash
-git clone https://github.com/YOUR_USER/AcouLM.git && cd AcouLM
-./hpc-setup.sh
-cp scripts/hpc/local_env.example.sh scripts/hpc/local_env.sh   # edit OPENVINO_GENAI_DIR + ACOULM_MODEL
+git clone https://github.com/est4ever/AcouLM.git && cd AcouLM
+bash scripts/hpc/linux_setup.sh    # like portable_setup.ps1 (config + optional model download)
+nano scripts/hpc/local_env.sh      # set OPENVINO_GENAI_DIR (required on cluster)
 source scripts/hpc/setup_env.sh
 ./build.sh
 sbatch scripts/hpc/slurm_acoulm.sbatch
