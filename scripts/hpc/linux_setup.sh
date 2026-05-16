@@ -70,24 +70,34 @@ copy_if_missing "registry/performance_profile.example.json" "registry/performanc
 chmod +x build.sh run.sh restart_backend.sh restart_stack.sh npu_cli.sh hpc-setup.sh portable_setup.sh 2>/dev/null || true
 chmod +x scripts/hpc/*.sh 2>/dev/null || true
 
-# --- Path 2: OpenVINO GenAI (user supplies — not pre-installed on cluster) ---
+# --- Path 2: OpenVINO GenAI (C++ SDK — pip alone cannot build npu_wrapper) ---
 echo ""
 echo "2) OpenVINO GenAI (required before ./build.sh)"
-echo "   Download Intel OpenVINO GenAI for Linux, unzip anywhere."
-echo "   Example:  ~/openvino_genai   (must contain setupvars.sh)"
+echo "   pip install openvino is Python-only. AcouLM needs the GenAI archive (setupvars.sh)."
+echo "   Easiest: auto-download now (one command, like pip)."
 echo ""
-OV_DIR=""
-while true; do
-  OV_DIR="$(prompt_nonempty "   OpenVINO GenAI folder" "$HOME/openvino_genai")"
-  if [[ -f "$OV_DIR/setupvars.sh" ]]; then
-    echo "   OK: found $OV_DIR/setupvars.sh"
-    break
-  fi
-  echo "   Not found: $OV_DIR/setupvars.sh"
-  if read_yesno "   Save this path anyway (install OpenVINO there before build)?" "y"; then
-    break
-  fi
-done
+OV_DIR="$HOME/openvino_genai"
+if read_yesno "   Auto-download OpenVINO GenAI 2026.1 Linux archive to ~/openvino_genai?" "y"; then
+  bash "$ACOULM_HOME/scripts/hpc/install_openvino_genai.sh" "$OV_DIR"
+elif [[ -f "$OV_DIR/setupvars.sh" ]]; then
+  echo "   Using existing $OV_DIR"
+else
+  while true; do
+    OV_DIR="$(prompt_nonempty "   OpenVINO GenAI folder" "$HOME/openvino_genai")"
+    if [[ -f "$OV_DIR/setupvars.sh" ]]; then
+      echo "   OK: found $OV_DIR/setupvars.sh"
+      break
+    fi
+    echo "   Not found: $OV_DIR/setupvars.sh"
+    if read_yesno "   Run auto-download installer now?" "y"; then
+      bash "$ACOULM_HOME/scripts/hpc/install_openvino_genai.sh" "$OV_DIR"
+      break
+    fi
+    if read_yesno "   Save path anyway (install later)?" "y"; then
+      break
+    fi
+  done
+fi
 export OPENVINO_GENAI_DIR="$OV_DIR"
 
 # --- Path 3: Model ---
