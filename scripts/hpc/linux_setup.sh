@@ -1,111 +1,222 @@
 #!/usr/bin/env bash
-# Linux one-shot setup (closest thing to portable_setup.ps1 on Windows).
-# Usage (from repo root):  bash scripts/hpc/linux_setup.sh
+# Linux interactive setup — same role as portable_setup.ps1 on Windows.
+# Run from repo root after clone:  bash scripts/hpc/linux_setup.sh
+# Or:  ./portable_setup.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
+read_yesno() {
+  local prompt="$1"
+  local default="${2:-y}"
+  local hint="[Y/n]"
+  [[ "$default" == "n" ]] && hint="[y/N]"
+  local ans=""
+  read -r -p "$prompt $hint " ans
+  ans="${ans:-$default}"
+  [[ "$ans" =~ ^[Yy] ]]
+}
+
+prompt_nonempty() {
+  local prompt="$1"
+  local default="${2:-}"
+  local val=""
+  while true; do
+    if [[ -n "$default" ]]; then
+      read -r -p "$prompt [$default]: " val
+      val="${val:-$default}"
+    else
+      read -r -p "$prompt: " val
+    fi
+    val="${val/#\~/$HOME}"
+    val="${val%/}"
+    if [[ -n "$val" ]]; then
+      echo "$val"
+      return
+    fi
+    echo "  (required — press Enter after typing a path)"
+  done
+}
+
 echo "=============================================="
-echo " AcouLM Linux setup (like portable_setup.ps1)"
+echo " AcouLM setup (Linux) — like portable_setup.ps1"
 echo "=============================================="
 echo ""
-
-# 1) Registry + folders (same as ./hpc-setup.sh)
-bash "$ROOT/scripts/hpc/bootstrap.sh"
+echo "You will choose 3 paths:"
+echo "  1) AcouLM install folder (this repo)"
+echo "  2) OpenVINO GenAI folder (YOU download/install; not in git)"
+echo "  3) Model folder (download now or point at existing weights)"
 echo ""
 
-# 2) local_env.sh
-ENV_FILE="$ROOT/scripts/hpc/local_env.sh"
-if [[ ! -f "$ENV_FILE" ]]; then
-  cp "$ROOT/scripts/hpc/local_env.example.sh" "$ENV_FILE"
-  echo "[setup] Created $ENV_FILE"
-fi
+# --- Path 1: AcouLM home ---
+ACOULM_HOME="$(prompt_nonempty "1) AcouLM folder" "$ROOT")"
+export ACOULM_HOME
+cd "$ACOULM_HOME"
+mkdir -p registry models gpu_cache export
 
-MODEL_DIR="${ACOULM_MODEL_DIR:-$HOME/models/Qwen2.5-0.5B-Instruct}"
-mkdir -p "$(dirname "$MODEL_DIR")"
+# Registry templates
+copy_if_missing() {
+  local src="$1" dst="$2"
+  if [[ ! -f "$dst" ]]; then
+    cp "$src" "$dst"
+    echo "[setup] Created $dst"
+  fi
+}
+copy_if_missing "registry/backends_registry.linux.example.json" "registry/backends_registry.json"
+copy_if_missing "registry/models_registry.example.json" "registry/models_registry.json"
+copy_if_missing "registry/performance_profile.example.json" "registry/performance_profile.json"
 
-# 3) Download a small starter model if missing (optional, needs huggingface-cli)
-if [[ -d "$MODEL_DIR" ]] && [[ -n "$(ls -A "$MODEL_DIR" 2>/dev/null)" ]]; then
-  echo "[setup] Model already present: $MODEL_DIR"
-else
-  echo "[setup] No model at $MODEL_DIR"
+chmod +x build.sh run.sh restart_backend.sh restart_stack.sh npu_cli.sh hpc-setup.sh portable_setup.sh 2>/dev/null || true
+chmod +x scripts/hpc/*.sh 2>/dev/null || true
+
+# --- Path 2: OpenVINO GenAI (user supplies — not pre-installed on cluster) ---
+echo ""
+echo "2) OpenVINO GenAI (required before ./build.sh)"
+echo "   Download Intel OpenVINO GenAI for Linux, unzip anywhere."
+echo "   Example:  ~/openvino_genai   (must contain setupvars.sh)"
+echo ""
+OV_DIR=""
+while true; do
+  OV_DIR="$(prompt_nonempty "   OpenVINO GenAI folder" "$HOME/openvino_genai")"
+  if [[ -f "$OV_DIR/setupvars.sh" ]]; then
+    echo "   OK: found $OV_DIR/setupvars.sh"
+    break
+  fi
+  echo "   Not found: $OV_DIR/setupvars.sh"
+  if read_yesno "   Save this path anyway (install OpenVINO there before build)?" "y"; then
+    break
+  fi
+done
+export OPENVINO_GENAI_DIR="$OV_DIR"
+
+# --- Path 3: Model ---
+echo ""
+echo "3) Model weights (not in git)"
+MODEL_ID="local-model"
+MODEL_PATH="./models/local-model"
+MODEL_FORMAT="openvino"
+
+if read_yesno "   Download a model from Hugging Face now?" "n"; then
+  HF_REPO="$(prompt_nonempty "   Hugging Face repo (org/name)" "Qwen/Qwen2.5-0.5B-Instruct")"
+  LOCAL_NAME="$(prompt_nonempty "   Local folder name under models/" "$(basename "$HF_REPO")")"
+  MODEL_DIR="$ACOULM_HOME/models/$LOCAL_NAME"
+  mkdir -p "$MODEL_DIR"
   if command -v huggingface-cli >/dev/null 2>&1; then
-    echo "[setup] Downloading Qwen2.5-0.5B-Instruct (small, good for first test)..."
-    huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct --local-dir "$MODEL_DIR"
+    huggingface-cli download "$HF_REPO" --local-dir "$MODEL_DIR"
   elif command -v hf >/dev/null 2>&1; then
-    echo "[setup] Downloading Qwen2.5-0.5B-Instruct (small, good for first test)..."
-    hf download Qwen/Qwen2.5-0.5B-Instruct --local-dir "$MODEL_DIR"
+    hf download "$HF_REPO" --local-dir "$MODEL_DIR"
   else
-    echo "[setup] huggingface-cli not found — skip auto-download."
-    echo "        Install:  pip install -U 'huggingface_hub[cli]'"
-    echo "        Or copy a model folder from your PC with scp."
+    echo "   Install: pip install -U 'huggingface_hub[cli]'"
+    echo "   Or: git clone https://huggingface.co/$HF_REPO $MODEL_DIR"
+    read -r -p "   Press Enter after the model is in $MODEL_DIR..." _
+  fi
+  MODEL_ID="$LOCAL_NAME"
+  MODEL_PATH="./models/$LOCAL_NAME"
+  if find "$MODEL_DIR" -maxdepth 2 -name '*.gguf' -print -quit 2>/dev/null | grep -q .; then
+    MODEL_FORMAT="gguf"
+  fi
+else
+  EXISTING="$(prompt_nonempty "   Model folder (full path)" "$ACOULM_HOME/models/Qwen2.5-0.5B-Instruct")"
+  if [[ "$EXISTING" == "$ACOULM_HOME"* ]]; then
+    MODEL_PATH="./${EXISTING#$ACOULM_HOME/}"
+    MODEL_PATH="${MODEL_PATH#/}"
+    MODEL_PATH="./$MODEL_PATH"
+  else
+    MODEL_PATH="$EXISTING"
+  fi
+  MODEL_ID="$(basename "$EXISTING")"
+  if find "$EXISTING" -maxdepth 2 -name '*.gguf' -print -quit 2>/dev/null | grep -q .; then
+    MODEL_FORMAT="gguf"
   fi
 fi
 
-# 4) Patch local_env.sh model path if still placeholder
-if grep -q '/path/to/openvino' "$ENV_FILE" 2>/dev/null; then
-  echo ""
-  echo "[setup] EDIT REQUIRED: $ENV_FILE"
-  echo "        Set OPENVINO_GENAI_DIR to your OpenVINO GenAI Linux install."
-  echo "        Find it with:  find /opt /usr/local \$HOME -name setupvars.sh 2>/dev/null | head -3"
+# Backend entrypoint
+BACKEND_EP="dist/npu_wrapper"
+if ! read_yesno "Use default backend dist/npu_wrapper?" "y"; then
+  BACKEND_EP="$(prompt_nonempty "Backend entrypoint" "dist/npu_wrapper")"
 fi
 
-# Update ACOULM_MODEL line in local_env if we downloaded
-if [[ -d "$MODEL_DIR" ]]; then
-  if grep -q '^export ACOULM_MODEL=' "$ENV_FILE"; then
-    sed -i.bak "s|^export ACOULM_MODEL=.*|export ACOULM_MODEL=$MODEL_DIR|" "$ENV_FILE"
-  else
-    echo "export ACOULM_MODEL=$MODEL_DIR" >> "$ENV_FILE"
-  fi
-  echo "[setup] Set ACOULM_MODEL=$MODEL_DIR in local_env.sh"
+# Write local_env.sh (used by HPC scripts)
+if [[ "$MODEL_PATH" == ./* ]]; then
+  ABS_MODEL="$ACOULM_HOME/${MODEL_PATH#./}"
+else
+  ABS_MODEL="$MODEL_PATH"
 fi
+ENV_FILE="$ACOULM_HOME/scripts/hpc/local_env.sh"
+cat > "$ENV_FILE" <<EOF
+#!/usr/bin/env bash
+# Generated by linux_setup.sh / portable_setup.sh
+export OPENVINO_GENAI_DIR=$OV_DIR
+export ACOULM_MODEL=$ABS_MODEL
+export ACOULM_DEVICE=GPU
+EOF
 
-# 5) Point registry at the model
-python3 - <<PY "$ROOT" "$MODEL_DIR"
-import json, os, sys
-root, model_dir = sys.argv[1], sys.argv[2]
-rp = os.path.join(root, "registry", "models_registry.json")
-with open(rp) as f:
+# Update registries
+python3 - <<PY
+import json, os
+root = os.environ["ACOULM_HOME"]
+model_id, model_path, model_fmt = "$MODEL_ID", "$MODEL_PATH", "$MODEL_FORMAT"
+backend_ep = "$BACKEND_EP"
+
+mr = os.path.join(root, "registry", "models_registry.json")
+with open(mr) as f:
     reg = json.load(f)
-rel = model_dir
-if model_dir.startswith(root):
-    rel = "./" + os.path.relpath(model_dir, root).replace(os.sep, "/")
-reg["selected_model"] = "hpc-local"
+reg["selected_model"] = model_id
 found = False
 for m in reg.get("models", []):
-    if m.get("id") == "hpc-local":
-        m["path"] = rel
-        m["format"] = "openvino"
+    if m.get("id") == model_id:
+        m.update({"path": model_path, "format": model_fmt, "backend": "openvino", "status": "ready"})
         found = True
 if not found:
     reg.setdefault("models", []).append({
-        "id": "hpc-local", "path": rel, "format": "openvino",
+        "id": model_id, "path": model_path, "format": model_fmt,
         "backend": "openvino", "status": "ready"
     })
-reg["selected_model"] = "hpc-local"
-with open(rp, "w") as f:
+with open(mr, "w") as f:
     json.dump(reg, f, indent=2)
-print("[setup] Updated registry/models_registry.json ->", rel)
+
+br = os.path.join(root, "registry", "backends_registry.json")
+with open(br) as f:
+    breg = json.load(f)
+breg["selected_backend"] = "openvino"
+for b in breg.get("backends", []):
+    if b.get("id") == "openvino":
+        b["entrypoint"] = backend_ep
+        b["type"] = "builtin"
+with open(br, "w") as f:
+    json.dump(breg, f, indent=2)
+print("[setup] registry/models_registry.json")
+print("[setup] registry/backends_registry.json")
 PY
 
 echo ""
 echo "=============================================="
-echo " Setup phase 1 done."
+echo " Setup saved"
 echo "=============================================="
+echo "  AcouLM   : $ACOULM_HOME"
+echo "  OpenVINO : $OPENVINO_GENAI_DIR"
+echo "  Model    : $MODEL_ID ($MODEL_PATH)"
+echo "  Backend  : $BACKEND_EP"
 echo ""
-echo "YOU STILL NEED (cluster admin or modules):"
-echo "  - OpenVINO GenAI for Linux -> set OPENVINO_GENAI_DIR in:"
-echo "      nano scripts/hpc/local_env.sh"
+
+if [[ -f "$OV_DIR/setupvars.sh" ]]; then
+  if read_yesno "Build npu_wrapper now? (needs cmake + GPU node optional)" "y"; then
+    # shellcheck source=/dev/null
+    source "$OV_DIR/setupvars.sh"
+    export ACOULM_HOME OPENVINO_GENAI_DIR
+    (cd "$ACOULM_HOME" && ./build.sh)
+  fi
+else
+  echo "Next: install OpenVINO GenAI into $OV_DIR (setupvars.sh must exist), then:"
+  echo "  cd $ACOULM_HOME"
+  echo "  source scripts/hpc/setup_env.sh"
+  echo "  ./build.sh"
+fi
+
 echo ""
-echo "THEN run:"
-echo "  cd $ROOT"
+echo "Start server (GPU node):"
 echo "  source scripts/hpc/setup_env.sh"
-echo "  ./build.sh"
-echo "  sbatch scripts/hpc/slurm_acoulm.sbatch"
-echo ""
-echo "Chat from laptop (after job is running):"
-echo "  ssh -L 8000:<compute-node>:8000 you@cluster"
-echo "  export ACOULM_API_BASE=http://127.0.0.1:8000"
-echo "  ./npu_cli.sh chat \"Hello\""
+echo "  bash scripts/hpc/start_server.sh"
+echo "Or: sbatch scripts/hpc/slurm_acoulm.sbatch"
 echo ""

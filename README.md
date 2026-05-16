@@ -16,8 +16,7 @@ After `git push`, on the cluster:
 
 ```bash
 git clone https://github.com/est4ever/AcouLM.git && cd AcouLM
-bash scripts/hpc/linux_setup.sh    # like portable_setup.ps1 (config + optional model download)
-nano scripts/hpc/local_env.sh      # set OPENVINO_GENAI_DIR (required on cluster)
+./portable_setup.sh                # asks for 3 paths (OpenVINO, model, backend) — like Windows
 source scripts/hpc/setup_env.sh
 ./build.sh
 sbatch scripts/hpc/slurm_acoulm.sbatch

@@ -30,11 +30,10 @@ cat <<'EOF'
 [bootstrap] Done.
 
 Next on this machine:
-  1) cp scripts/hpc/local_env.example.sh scripts/hpc/local_env.sh
-     Edit: OPENVINO_GENAI_DIR, ACOULM_MODEL (path on scratch)
+  1) ./portable_setup.sh
+     (asks for OpenVINO folder, model path, backend — like Windows)
 
-  2) source scripts/hpc/setup_env.sh
-     ./build.sh
+  2) source scripts/hpc/setup_env.sh && ./build.sh
 
   3) sbatch scripts/hpc/slurm_acoulm.sbatch
      (or: bash scripts/hpc/start_server.sh on an interactive GPU node)
