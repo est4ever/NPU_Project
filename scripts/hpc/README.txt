@@ -17,7 +17,9 @@ AcouLM on a remote supercomputer (Linux + SLURM)
 5) sbatch scripts/hpc/slurm_acoulm.sbatch
 
 6) Laptop tunnel:  ssh -L 8000:<compute-node>:8000 user@cluster
-   ./npu_cli.sh chat "Hello"
+   acoulm chat "Hello"    (after: acoulm setup  — same name as Windows)
+
+One-time:  ./acoulm.sh setup   → adds ~/.local/bin/acoulm to PATH
 
 Notes
 -----

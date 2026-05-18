@@ -22,7 +22,7 @@ copy_if_missing "registry/backends_registry.linux.example.json" "registry/backen
 copy_if_missing "registry/models_registry.example.json" "registry/models_registry.json"
 copy_if_missing "registry/performance_profile.example.json" "registry/performance_profile.json"
 
-chmod +x build.sh run.sh restart_backend.sh restart_stack.sh npu_cli.sh hpc-setup.sh 2>/dev/null || true
+chmod +x build.sh run.sh restart_backend.sh restart_stack.sh npu_cli.sh acoulm.sh hpc-setup.sh 2>/dev/null || true
 chmod +x scripts/hpc/*.sh 2>/dev/null || true
 
 cat <<'EOF'
