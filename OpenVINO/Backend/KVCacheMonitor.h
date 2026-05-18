@@ -2,7 +2,6 @@
 #include <cstddef>
 #include <string>
 #include <chrono>
-#include <Windows.h>
 
 // Memory monitoring and KV-cache management utility
 class KVCacheMonitor {
@@ -44,6 +43,5 @@ private:
     bool disk_paging_enabled_;
     std::string paging_dir_;
     
-    // Windows-specific memory query
-    void query_windows_memory(MemoryStats& stats) const;
+    void query_system_memory(MemoryStats& stats) const;
 };

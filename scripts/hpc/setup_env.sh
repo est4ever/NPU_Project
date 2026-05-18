@@ -45,8 +45,31 @@ export ACOULM_FAST_LOAD=1
 export ACOULM_GPU_TIER=discrete
 export ACOULM_DEVICE="${ACOULM_DEVICE:-GPU}"
 
-# Model path on shared filesystem (set before sbatch or in local_env.sh)
-export ACOULM_MODEL="${ACOULM_MODEL:-./models/Qwen2.5-3B-Instruct}"
+# Model: local_env.sh wins, else registry selected_model, else example default
+if [[ -z "${ACOULM_MODEL:-}" ]]; then
+  _reg_model="$(python3 - <<'PY' 2>/dev/null || true
+import json, os
+root = os.environ["ACOULM_HOME"]
+path = os.path.join(root, "registry", "models_registry.json")
+try:
+    with open(path) as f:
+        reg = json.load(f)
+    sel = reg.get("selected_model")
+    for m in reg.get("models", []):
+        if m.get("id") == sel and m.get("path"):
+            print(m["path"])
+            break
+except (OSError, json.JSONDecodeError, KeyError):
+    pass
+PY
+)"
+  if [[ -n "$_reg_model" ]]; then
+    export ACOULM_MODEL="$_reg_model"
+  else
+    export ACOULM_MODEL="./models/Qwen2.5-3B-Instruct"
+  fi
+  unset _reg_model
+fi
 export ACOULM_PORT="${ACOULM_PORT:-8000}"
 
 # OpenVINO GenAI root (required for build.sh / run.sh)
@@ -59,7 +82,20 @@ if [[ -n "${OPENVINO_GENAI_DIR:-}" && -f "${OPENVINO_GENAI_DIR}/setupvars.sh" ]]
   source_openvino_setupvars "${OPENVINO_GENAI_DIR}"
 fi
 
+_reg_id="$(python3 -c "
+import json, os
+p = os.path.join(os.environ['ACOULM_HOME'], 'registry', 'models_registry.json')
+try:
+    print(json.load(open(p)).get('selected_model', ''))
+except Exception:
+    pass
+" 2>/dev/null || true)"
 echo "[hpc] ACOULM_HOME=$ACOULM_HOME"
-echo "[hpc] ACOULM_MODEL=$ACOULM_MODEL"
+if [[ -n "$_reg_id" ]]; then
+  echo "[hpc] ACOULM_MODEL=$ACOULM_MODEL (registry: $_reg_id)"
+else
+  echo "[hpc] ACOULM_MODEL=$ACOULM_MODEL"
+fi
+unset _reg_id
 echo "[hpc] ACOULM_DEVICE=$ACOULM_DEVICE"
 echo "[hpc] OPENVINO_GENAI_DIR=${OPENVINO_GENAI_DIR:-<not set>}"
