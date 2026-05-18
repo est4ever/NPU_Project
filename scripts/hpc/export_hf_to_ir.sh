@@ -65,17 +65,31 @@ ensure_export_env() {
 EXPORT_ENV="${ACOULM_EXPORT_ENV:-${ACOULM_EXPORT_VENV:-$HOME/acoulm-export-env}}"
 PYTHON="$EXPORT_ENV/bin/python"
 
-if [[ "$QWEN35" -eq 1 ]]; then
-  echo "[export] Qwen3.5 detected — using isolated env: $EXPORT_ENV"
-  echo "[export] (stable optimum-intel 1.27 does not support qwen3_5 yet; trying GitHub builds)"
-  ensure_export_env "$EXPORT_ENV"
+install_qwen35_export_stack() {
+  # optimum-intel main + transformers 5.x (see optimum-intel PR #1689). Do not install both
+  # in one pip line — PyPI metadata still pins transformers<4.58 on older releases.
   "$PYTHON" -m pip install -q -U pip wheel
   "$PYTHON" -m pip install -q -U "torch" --index-url https://download.pytorch.org/whl/cpu 2>/dev/null \
     || "$PYTHON" -m pip install -q -U "torch"
   "$PYTHON" -m pip install -q -U \
-    "git+https://github.com/huggingface/transformers.git" \
-    "git+https://github.com/huggingface/optimum-intel.git" \
-    "openvino" "optimum" "huggingface_hub"
+    "transformers==5.2.0" \
+    "openvino" "optimum" "nncf" "huggingface_hub" "onnx" "sentencepiece"
+  "$PYTHON" -m pip install -q -U --no-deps \
+    "git+https://github.com/huggingface/optimum-intel.git"
+}
+
+EXPORT_TASK="text-generation-with-past"
+if [[ "$QWEN35" -eq 1 ]]; then
+  echo "[export] Qwen3.5+ detected — using isolated env: $EXPORT_ENV"
+  echo "[export] Installing optimum-intel (main) + transformers 5.2.0..."
+  ensure_export_env "$EXPORT_ENV"
+  install_qwen35_export_stack
+  # optimum-intel only registers qwen3_5 / Qwen3.6 for image-text-to-text (not text-generation-with-past).
+  EXPORT_TASK="image-text-to-text"
+  echo "[export] Qwen3.5/3.6 export task: image-text-to-text"
+  if [[ -f "$HF_DIR/video_preprocessor_config.json" ]]; then
+    echo "[export] Note: This is a multimodal (video/VLM) checkpoint. AcouLM text-only LLMPipeline may not load it."
+  fi
 else
   PYTHON="${PYTHON:-python3}"
   if [[ -n "${CONDA_PREFIX:-}" && -x "${CONDA_PREFIX}/bin/python" ]]; then
@@ -95,12 +109,13 @@ mkdir -p "$TMP"
 echo "[export] HF:  $HF_DIR"
 echo "[export] IR:  $IR_DIR"
 echo "[export] Format: $WEIGHT_FORMAT (use int4 for 27B to save disk/RAM)"
+echo "[export] Task:   $EXPORT_TASK"
 echo "[export] This can take a long time for large models..."
 
 set +e
 "$PYTHON" -m optimum.commands.optimum_cli export openvino \
   --model "$HF_DIR" \
-  --task text-generation-with-past \
+  --task "$EXPORT_TASK" \
   --weight-format "$WEIGHT_FORMAT" \
   "${TRUST_FLAG[@]}" \
   "$TMP"
