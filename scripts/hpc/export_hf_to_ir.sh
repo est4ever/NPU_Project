@@ -41,16 +41,34 @@ if [[ -f "$IR_DIR/openvino_model.xml" ]] || find "$IR_DIR" -maxdepth 2 -name 'op
 fi
 
 # Qwen3.5 (qwen3_5) needs bleeding-edge optimum-intel + transformers.
-# Do NOT upgrade base conda — use an isolated venv so acoulm build env stays intact.
-EXPORT_VENV="${ACOULM_EXPORT_VENV:-$HOME/acoulm-export-venv}"
-PYTHON="$EXPORT_VENV/bin/python"
+# Do NOT upgrade base conda — use an isolated env so acoulm build env stays intact.
+ensure_export_env() {
+  local env_dir="$1"
+  local py="$env_dir/bin/python"
+  if [[ -x "$py" ]] && "$py" -m pip --version &>/dev/null; then
+    return 0
+  fi
+  rm -rf "$env_dir"
+  if command -v conda &>/dev/null; then
+    echo "[export] Creating conda env at $env_dir (works without python3-venv / sudo)..."
+    conda create -y -p "$env_dir" python=3.12 pip git
+    return 0
+  fi
+  echo "[export] Trying python3 -m venv..."
+  if python3 -m venv "$env_dir"; then
+    return 0
+  fi
+  echo "[export] Cannot create export env. Use conda (above) or: sudo apt install python3-venv" >&2
+  exit 1
+}
+
+EXPORT_ENV="${ACOULM_EXPORT_ENV:-${ACOULM_EXPORT_VENV:-$HOME/acoulm-export-env}}"
+PYTHON="$EXPORT_ENV/bin/python"
 
 if [[ "$QWEN35" -eq 1 ]]; then
-  echo "[export] Qwen3.5 detected — using isolated venv: $EXPORT_VENV"
+  echo "[export] Qwen3.5 detected — using isolated env: $EXPORT_ENV"
   echo "[export] (stable optimum-intel 1.27 does not support qwen3_5 yet; trying GitHub builds)"
-  if [[ ! -x "$PYTHON" ]]; then
-    python3 -m venv "$EXPORT_VENV"
-  fi
+  ensure_export_env "$EXPORT_ENV"
   "$PYTHON" -m pip install -q -U pip wheel
   "$PYTHON" -m pip install -q -U "torch" --index-url https://download.pytorch.org/whl/cpu 2>/dev/null \
     || "$PYTHON" -m pip install -q -U "torch"
