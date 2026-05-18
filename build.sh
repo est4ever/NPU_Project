@@ -52,7 +52,24 @@ ensure_cmake_318() {
 
 ensure_cmake_318
 
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+# OpenVINO 2026.1 prebuilts need glibc >= 2.34 (ubuntu22 archive).
+# shellcheck source=scripts/hpc/ensure_toolchain.sh
+source "$ROOT/scripts/hpc/ensure_toolchain.sh"
+hpc_ensure_toolchain
+
+CMAKE_ARGS=(-S . -B build -DCMAKE_BUILD_TYPE=Release)
+if [[ -n "${CC:-}" ]]; then CMAKE_ARGS+=(-DCMAKE_C_COMPILER="$CC"); fi
+if [[ -n "${CXX:-}" ]]; then CMAKE_ARGS+=(-DCMAKE_CXX_COMPILER="$CXX"); fi
+if [[ -n "${CONDA_BUILD_SYSROOT:-}" ]]; then
+  CMAKE_ARGS+=(
+    -DCMAKE_SYSROOT="$CONDA_BUILD_SYSROOT"
+    -DCMAKE_EXE_LINKER_FLAGS="${LDFLAGS:-}"
+    -DCMAKE_SHARED_LINKER_FLAGS="${LDFLAGS:-}"
+  )
+fi
+
+# Re-configure when compiler/sysroot changes.
+cmake "${CMAKE_ARGS[@]}"
 cmake --build build -j"$(nproc 2>/dev/null || echo 4)"
 
 mkdir -p dist
