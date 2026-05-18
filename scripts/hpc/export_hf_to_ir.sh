@@ -24,11 +24,15 @@ if find "$HF_DIR" -maxdepth 1 -name 'openvino*.xml' -print -quit 2>/dev/null | g
   exit 0
 fi
 
+QWEN35=0
+if grep -qE 'qwen3_5|qwen3\.5' "$HF_DIR/config.json" 2>/dev/null; then
+  QWEN35=1
+fi
 QWEN3=0
-if grep -qE 'qwen3|Qwen3|qwen3_5' "$HF_DIR/config.json" 2>/dev/null; then
+if [[ "$QWEN35" -eq 1 ]] || grep -qE '"qwen3"|qwen3_moe|Qwen3' "$HF_DIR/config.json" 2>/dev/null; then
   TRUST_FLAG=(--trust-remote-code)
   QWEN3=1
-  echo "[export] Qwen3 / Qwen3.5: using --trust-remote-code"
+  echo "[export] Qwen3 family: using --trust-remote-code"
 fi
 
 if [[ -f "$IR_DIR/openvino_model.xml" ]] || find "$IR_DIR" -maxdepth 2 -name 'openvino*.xml' -print -quit 2>/dev/null | grep -q .; then
@@ -36,19 +40,34 @@ if [[ -f "$IR_DIR/openvino_model.xml" ]] || find "$IR_DIR" -maxdepth 2 -name 'op
   exit 0
 fi
 
-PYTHON="${PYTHON:-python3}"
-if [[ -n "${CONDA_PREFIX:-}" && -x "${CONDA_PREFIX}/bin/python" ]]; then
-  PYTHON="${CONDA_PREFIX}/bin/python"
-fi
+# Qwen3.5 (qwen3_5) needs bleeding-edge optimum-intel + transformers.
+# Do NOT upgrade base conda — use an isolated venv so acoulm build env stays intact.
+EXPORT_VENV="${ACOULM_EXPORT_VENV:-$HOME/acoulm-export-venv}"
+PYTHON="$EXPORT_VENV/bin/python"
 
-echo "[export] Installing optimum-intel (one-time, may take a few minutes)..."
-"$PYTHON" -m pip install -q -U pip
-if [[ "$QWEN3" -eq 1 ]]; then
-  echo "[export] Qwen3.5 needs a current transformers (pip install from GitHub)..."
-  "$PYTHON" -m pip install -q -U "optimum" "optimum-intel[openvino]" "openvino" "huggingface_hub<1.0"
-  "$PYTHON" -m pip install -q -U "git+https://github.com/huggingface/transformers.git"
+if [[ "$QWEN35" -eq 1 ]]; then
+  echo "[export] Qwen3.5 detected — using isolated venv: $EXPORT_VENV"
+  echo "[export] (stable optimum-intel 1.27 does not support qwen3_5 yet; trying GitHub builds)"
+  if [[ ! -x "$PYTHON" ]]; then
+    python3 -m venv "$EXPORT_VENV"
+  fi
+  "$PYTHON" -m pip install -q -U pip wheel
+  "$PYTHON" -m pip install -q -U "torch" --index-url https://download.pytorch.org/whl/cpu 2>/dev/null \
+    || "$PYTHON" -m pip install -q -U "torch"
+  "$PYTHON" -m pip install -q -U \
+    "git+https://github.com/huggingface/transformers.git" \
+    "git+https://github.com/huggingface/optimum-intel.git" \
+    "openvino" "optimum" "huggingface_hub"
 else
-  "$PYTHON" -m pip install -q -U "optimum" "optimum-intel[openvino]" "openvino" "transformers>=4.57.0,<4.58" "huggingface_hub<1.0"
+  PYTHON="${PYTHON:-python3}"
+  if [[ -n "${CONDA_PREFIX:-}" && -x "${CONDA_PREFIX}/bin/python" ]]; then
+    PYTHON="${CONDA_PREFIX}/bin/python"
+  fi
+  echo "[export] Installing optimum-intel (one-time)..."
+  "$PYTHON" -m pip install -q -U pip
+  # 4.57+ is not on PyPI for all indexes; optimum-intel 1.27 wants >=4.45,<4.58
+  "$PYTHON" -m pip install -q -U "optimum" "optimum-intel[openvino]" "openvino" \
+    "transformers>=4.45,<4.58" "huggingface_hub<1.0"
 fi
 
 TMP="${IR_DIR}.tmp.$$"
@@ -61,27 +80,28 @@ echo "[export] Format: $WEIGHT_FORMAT (use int4 for 27B to save disk/RAM)"
 echo "[export] This can take a long time for large models..."
 
 set +e
-if command -v optimum-cli >/dev/null 2>&1; then
-  optimum-cli export openvino \
-    --model "$HF_DIR" \
-    --task text-generation-with-past \
-    --weight-format "$WEIGHT_FORMAT" \
-    "${TRUST_FLAG[@]}" \
-    "$TMP"
-  rc=$?
-else
-  "$PYTHON" -m optimum.commands.optimum_cli export openvino \
-    --model "$HF_DIR" \
-    --task text-generation-with-past \
-    --weight-format "$WEIGHT_FORMAT" \
-    "${TRUST_FLAG[@]}" \
-    "$TMP"
-  rc=$?
-fi
+"$PYTHON" -m optimum.commands.optimum_cli export openvino \
+  --model "$HF_DIR" \
+  --task text-generation-with-past \
+  --weight-format "$WEIGHT_FORMAT" \
+  "${TRUST_FLAG[@]}" \
+  "$TMP"
+rc=$?
 set -e
 
 if [[ $rc -ne 0 ]]; then
-  echo "[export] Failed (exit $rc). For 27B you need lots of RAM; try int4 on a machine with 64GB+." >&2
+  echo "[export] Failed (exit $rc)." >&2
+  if [[ "$QWEN35" -eq 1 ]]; then
+    cat >&2 <<'EOF'
+[export] Qwen3.5 (architecture qwen3_5) may not be exportable on this stack yet.
+Try on your Windows PC (newer OpenVINO / AcouLM):
+  .\Export-HfFolderToOpenVinoIR.ps1 -ProjectRoot . -HfModelDir .\models\Qwen3.6-27B `
+    -IrOutputDir .\models\Qwen3.6-27B-ov-ir -WeightFormat int4 -TrustRemoteCode
+Then copy models\Qwen3.6-27B-ov-ir to the cluster and set ACOULM_MODEL to that path.
+EOF
+  else
+    echo "[export] For 27B you need lots of RAM; try int4 on a machine with 64GB+." >&2
+  fi
   rm -rf "$TMP"
   exit $rc
 fi
