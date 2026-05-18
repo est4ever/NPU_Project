@@ -2,7 +2,8 @@
 # Export Hugging Face folder (config.json + *.safetensors) to OpenVINO IR for acoulm start.
 # Same role as Export-HfFolderToOpenVinoIR.ps1 on Windows.
 #
-# Usage:
+# Usage (pull first so local script edits do not block updates):
+#   bash scripts/hpc/git_pull.sh
 #   bash scripts/hpc/export_hf_to_ir.sh /home/twin/AcouLM/models/Qwen3.6-27B
 #   bash scripts/hpc/export_hf_to_ir.sh ./models/Qwen3.6-27B ./models/Qwen3.6-27B-ov-ir int4
 set -euo pipefail
