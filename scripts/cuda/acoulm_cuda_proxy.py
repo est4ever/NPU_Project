@@ -224,7 +224,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--server", action="store_true")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--device", default="GPU", help="Maps to CUDA (ACOULM_CUDA_DEVICES)")
-    return p.parse_args(argv)
+    # run.sh / start_server.sh pass OpenVINO-style flags; ignore them on the CUDA backend.
+    args, unknown = p.parse_known_args(argv)
+    if unknown:
+        print(f"[cuda] Ignoring extra args: {' '.join(unknown)}")
+    return args
 
 
 def main() -> None:
