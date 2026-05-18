@@ -7,13 +7,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 export ACOULM_HOME="${ACOULM_HOME:-$ROOT}"
+# shellcheck source=scripts/hpc/openvino_env.sh
+source "$ROOT/scripts/hpc/openvino_env.sh"
 
 if [[ -f "${OPENVINO_GENAI_DIR:-}/setupvars.sh" ]]; then
-  # shellcheck source=/dev/null
-  source "${OPENVINO_GENAI_DIR}/setupvars.sh"
+  source_openvino_setupvars "${OPENVINO_GENAI_DIR}"
 elif [[ -f "${INTEL_OPENVINO_DIR:-}/setupvars.sh" ]]; then
-  # shellcheck source=/dev/null
-  source "${INTEL_OPENVINO_DIR}/setupvars.sh"
+  source_openvino_setupvars "${INTEL_OPENVINO_DIR}"
 fi
 
 resolve_backend_exe() {

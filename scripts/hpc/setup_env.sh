@@ -5,6 +5,8 @@
 ACOULM_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export ACOULM_HOME="${ACOULM_HOME:-$ACOULM_ROOT}"
 cd "$ACOULM_HOME"
+# shellcheck source=openvino_env.sh
+source "$(dirname "${BASH_SOURCE[0]}")/openvino_env.sh"
 
 if [[ ! -f "${ACOULM_HOME}/registry/backends_registry.json" ]]; then
   echo "[hpc] Run ./hpc-setup.sh first (creates registry files)." >&2
@@ -37,6 +39,10 @@ export ACOULM_PORT="${ACOULM_PORT:-8000}"
 
 mkdir -p "${ACOULM_HOME}/gpu_cache"
 export OV_CACHE_DIR="${OV_CACHE_DIR:-${ACOULM_HOME}/gpu_cache}"
+
+if [[ -n "${OPENVINO_GENAI_DIR:-}" && -f "${OPENVINO_GENAI_DIR}/setupvars.sh" ]]; then
+  source_openvino_setupvars "${OPENVINO_GENAI_DIR}"
+fi
 
 echo "[hpc] ACOULM_HOME=$ACOULM_HOME"
 echo "[hpc] ACOULM_MODEL=$ACOULM_MODEL"
