@@ -9,6 +9,8 @@ cd "$ROOT"
 export ACOULM_HOME="${ACOULM_HOME:-$ROOT}"
 # shellcheck source=scripts/hpc/openvino_env.sh
 source "$ROOT/scripts/hpc/openvino_env.sh"
+# shellcheck source=scripts/hpc/runtime_libs.sh
+source "$ROOT/scripts/hpc/runtime_libs.sh"
 
 if [[ -f "${OPENVINO_GENAI_DIR:-}/setupvars.sh" ]]; then
   source_openvino_setupvars "${OPENVINO_GENAI_DIR}"
@@ -53,10 +55,7 @@ if [[ ! -x "$TARGET" ]]; then
   fi
 fi
 
-DIST_DIR="$(dirname "$TARGET")"
-if [[ -d "$DIST_DIR" ]]; then
-  export LD_LIBRARY_PATH="${DIST_DIR}:${LD_LIBRARY_PATH:-}"
-fi
+hpc_export_runtime_ldpath
 
 if [[ "${ACOULM_SNAPPY:-1}" != "0" ]]; then
   export ACOULM_SNAPPY=1
