@@ -55,8 +55,6 @@ if [[ ! -x "$TARGET" ]]; then
   fi
 fi
 
-hpc_export_runtime_ldpath
-
 if [[ "${ACOULM_SNAPPY:-1}" != "0" ]]; then
   export ACOULM_SNAPPY=1
   export ACOULM_PERFORMANCE_MODE=1
@@ -67,4 +65,4 @@ if [[ "${ACOULM_SNAPPY:-1}" != "0" ]]; then
 fi
 
 echo "[run.sh] $TARGET $*"
-exec "$TARGET" "$@"
+hpc_exec_backend "$TARGET" "$@"
