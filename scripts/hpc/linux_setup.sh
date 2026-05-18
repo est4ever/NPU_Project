@@ -6,6 +6,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
+# shellcheck source=openvino_env.sh
+source "$(dirname "${BASH_SOURCE[0]}")/openvino_env.sh"
 
 read_yesno() {
   local prompt="$1"
@@ -128,10 +130,11 @@ if read_yesno "   Download a model from Hugging Face now?" "n"; then
   fi
 else
   EXISTING="$(prompt_nonempty "   Model folder (full path)" "$ACOULM_HOME/models/Qwen2.5-0.5B-Instruct")"
-  if [[ "$EXISTING" == "$ACOULM_HOME"* ]]; then
-    MODEL_PATH="./${EXISTING#$ACOULM_HOME/}"
-    MODEL_PATH="${MODEL_PATH#/}"
-    MODEL_PATH="./$MODEL_PATH"
+  EXISTING="${EXISTING/#\~/$HOME}"
+  if [[ "$EXISTING" == "$ACOULM_HOME"/* ]]; then
+    MODEL_PATH="./${EXISTING#"$ACOULM_HOME"/}"
+  elif [[ "$EXISTING" == ./* ]]; then
+    MODEL_PATH="$EXISTING"
   else
     MODEL_PATH="$EXISTING"
   fi
@@ -212,9 +215,8 @@ echo ""
 
 if [[ -f "$OV_DIR/setupvars.sh" ]]; then
   if read_yesno "Build npu_wrapper now? (needs cmake + GPU node optional)" "y"; then
-    # shellcheck source=/dev/null
-    source "$OV_DIR/setupvars.sh"
     export ACOULM_HOME OPENVINO_GENAI_DIR
+    source_openvino_setupvars "$OV_DIR"
     (cd "$ACOULM_HOME" && ./build.sh)
   fi
 else

@@ -18,6 +18,9 @@ AcouLM on a remote supercomputer (Linux + SLURM)
 
 Notes
 -----
+- If setupvars.sh errors on "python_version: unbound variable", pull latest and use
+  source scripts/hpc/setup_env.sh (or re-run linux_setup.sh). Or verify OpenVINO install:
+  bash scripts/hpc/install_openvino_genai.sh
 - Prefer OpenVINO IR folders over GGUF on HPC for faster loads.
 - API listens on 0.0.0.0:8000 inside the job (see RestAPIServer).
 - Windows scripts (acoulm.ps1, start_app.ps1) are not used on the cluster.
