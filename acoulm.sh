@@ -48,7 +48,12 @@ AcouLM (Linux / HPC)
   acoulm start          Start API on this node (needs GPU + setup_env)
   acoulm chat [msg]     Talk to API (set ACOULM_API_BASE if tunneled)
   acoulm status         API / model status
+  acoulm cuda-setup     Build llama.cpp llama-server with CUDA (NVIDIA)
+  acoulm use-cuda       Switch registry to cuda-llama backend (needs GGUF)
+  acoulm use-openvino   Switch registry back to OpenVINO (Intel CPU/GPU/NPU)
   acoulm help
+
+NVIDIA GPUs (4x RTX, etc.): OpenVINO builtin cannot use them. Use cuda-setup + use-cuda + a GGUF model.
 
 HPC workflow:
   source scripts/hpc/setup_env.sh
@@ -89,6 +94,26 @@ case "$CMD" in
     [[ -n "$ROOT" ]] || { echo "[acoulm] ACOULM_HOME not set." >&2; exit 1; }
     export ACOULM_HOME="$ROOT"
     exec bash "$ROOT/scripts/hpc/start_server.sh"
+    ;;
+  cuda-setup)
+    [[ -n "$ROOT" ]] || { echo "[acoulm] ACOULM_HOME not set." >&2; exit 1; }
+    exec bash "$ROOT/scripts/hpc/install_llama_cuda.sh"
+    ;;
+  use-cuda)
+    [[ -n "$ROOT" ]] || { echo "[acoulm] ACOULM_HOME not set." >&2; exit 1; }
+    exec bash "$ROOT/scripts/hpc/use_cuda_backend.sh"
+    ;;
+  use-openvino)
+    [[ -n "$ROOT" ]] || { echo "[acoulm] ACOULM_HOME not set." >&2; exit 1; }
+    python3 - "$ROOT/registry/backends_registry.json" <<'PY'
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+d = json.loads(p.read_text())
+d["selected_backend"] = "openvino"
+p.write_text(json.dumps(d, indent=2) + "\n")
+print("[acoulm] selected_backend=openvino")
+PY
     ;;
   chat|status|health)
     [[ -n "$ROOT" ]] || { echo "[acoulm] ACOULM_HOME not set." >&2; exit 1; }

@@ -14,7 +14,12 @@ api_get() {
 api_post() {
   local path="$1"
   local body="$2"
-  curl -fsS -H "Content-Type: application/json" -X POST -d "$body" "${API_BASE}${path}"
+  local extra_hdr=()
+  # Server allows chat only from terminal clients (see RestAPIServer.cpp).
+  if [[ "$path" == "/v1/chat/completions" ]]; then
+    extra_hdr=(-H "x-npu-cli: true")
+  fi
+  curl -fsS -H "Content-Type: application/json" "${extra_hdr[@]}" -X POST -d "$body" "${API_BASE}${path}"
 }
 
 case "$CMD" in

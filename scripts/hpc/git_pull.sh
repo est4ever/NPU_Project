@@ -14,18 +14,16 @@ branch="$(git rev-parse --abbrev-ref HEAD)"
 remote="${ACOULM_GIT_REMOTE:-origin}"
 stashed=0
 
-has_local_changes() {
-  ! git diff --quiet 2>/dev/null || return 0
-  ! git diff --cached --quiet 2>/dev/null || return 0
-  return 1
-}
-
 echo "[git] Fetching $remote..."
 git fetch "$remote"
 
-if has_local_changes; then
-  echo "[git] Stashing local edits..."
-  git stash push -m "acoulm-before-pull-$(date +%Y%m%d-%H%M%S)"
+stash_before="$(git stash list | wc -l)"
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "[git] Stashing local edits (if any)..."
+  git stash push -m "acoulm-before-pull-$(date +%Y%m%d-%H%M%S)" || true
+fi
+stash_after="$(git stash list | wc -l)"
+if [[ "$stash_after" -gt "$stash_before" ]]; then
   stashed=1
 fi
 

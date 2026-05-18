@@ -4,6 +4,7 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <string>
 #include <cstdlib>
 #include <filesystem>
 #include <openvino/genai/text_streamer.hpp>
@@ -197,6 +198,15 @@ ov::AnyMap build_pipeline_config(const std::string& device, bool minimal_cpu, co
     return pipeline_config;
 }
 
+bool apply_chat_template_enabled() {
+    const char* env = std::getenv("ACOULM_APPLY_CHAT_TEMPLATE");
+    if (!env || !*env) {
+        return false;
+    }
+    const std::string v(env);
+    return v == "1" || v == "true" || v == "TRUE" || v == "yes" || v == "YES";
+}
+
 } // namespace
 
 void OpenVINOBackend::load_model(const std::string& model_path, const std::string& device) {
@@ -261,6 +271,7 @@ void OpenVINOBackend::generate_stream(const std::string& prompt) {
     ov::genai::GenerationConfig cfg;
     cfg.max_new_tokens = 128;
     cfg.temperature = 0.7f;
+    cfg.apply_chat_template = apply_chat_template_enabled();
 
     std::string buffer;
 
@@ -318,6 +329,7 @@ GeneratedOutput OpenVINOBackend::generate_output(
     ov::genai::GenerationConfig cfg;
     cfg.max_new_tokens = max_new_tokens;
     cfg.temperature = temperature;
+    cfg.apply_chat_template = apply_chat_template_enabled();
 
     std::string buffer;
     auto callback = [&](std::string piece) -> ov::genai::StreamingStatus {
