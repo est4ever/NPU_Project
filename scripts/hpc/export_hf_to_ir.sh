@@ -24,9 +24,11 @@ if find "$HF_DIR" -maxdepth 1 -name 'openvino*.xml' -print -quit 2>/dev/null | g
   exit 0
 fi
 
-if grep -qE 'qwen3|Qwen3' "$HF_DIR/config.json" 2>/dev/null; then
+QWEN3=0
+if grep -qE 'qwen3|Qwen3|qwen3_5' "$HF_DIR/config.json" 2>/dev/null; then
   TRUST_FLAG=(--trust-remote-code)
-  echo "[export] Qwen3 family: using --trust-remote-code"
+  QWEN3=1
+  echo "[export] Qwen3 / Qwen3.5: using --trust-remote-code"
 fi
 
 if [[ -f "$IR_DIR/openvino_model.xml" ]] || find "$IR_DIR" -maxdepth 2 -name 'openvino*.xml' -print -quit 2>/dev/null | grep -q .; then
@@ -41,7 +43,13 @@ fi
 
 echo "[export] Installing optimum-intel (one-time, may take a few minutes)..."
 "$PYTHON" -m pip install -q -U pip
-"$PYTHON" -m pip install -q -U "optimum" "optimum-intel[openvino]" "openvino" "transformers>=4.57.0,<4.58" "huggingface_hub<1.0"
+if [[ "$QWEN3" -eq 1 ]]; then
+  echo "[export] Qwen3.5 needs a current transformers (pip install from GitHub)..."
+  "$PYTHON" -m pip install -q -U "optimum" "optimum-intel[openvino]" "openvino" "huggingface_hub<1.0"
+  "$PYTHON" -m pip install -q -U "git+https://github.com/huggingface/transformers.git"
+else
+  "$PYTHON" -m pip install -q -U "optimum" "optimum-intel[openvino]" "openvino" "transformers>=4.57.0,<4.58" "huggingface_hub<1.0"
+fi
 
 TMP="${IR_DIR}.tmp.$$"
 rm -rf "$TMP"
