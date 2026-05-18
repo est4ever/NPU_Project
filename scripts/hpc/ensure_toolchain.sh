@@ -6,23 +6,10 @@
 #   source scripts/hpc/ensure_toolchain.sh
 set -euo pipefail
 
-_hpc_glibc_max() {
-  local libc="${1:-/lib/x86_64-linux-gnu/libc.so.6}"
-  if [[ ! -f "$libc" ]]; then
-    echo "0.0"
-    return
-  fi
-  strings "$libc" 2>/dev/null | sed -n 's/^GLIBC_//p' | sort -Vu | tail -1
-}
-
-_hpc_ver_ge() {
-  python3 - "$1" "$2" <<'PY'
-import sys
-def p(v):
-    return tuple(int(x) for x in v.split(".")[:3])
-sys.exit(0 if p(sys.argv[1]) >= p(sys.argv[2]) else 1)
-PY
-}
+# shellcheck source=glibc_util.sh
+source "$(dirname "${BASH_SOURCE[0]}")/glibc_util.sh"
+_hpc_glibc_max() { hpc_glibc_max "$@"; }
+_hpc_ver_ge() { hpc_ver_ge "$@"; }
 
 _hpc_try_module_gcc() {
   if ! command -v module >/dev/null 2>&1; then
@@ -70,7 +57,7 @@ _hpc_setup_conda_toolchain() {
   export CFLAGS="--sysroot=${sysroot} ${CFLAGS:-}"
   export CXXFLAGS="--sysroot=${sysroot} ${CXXFLAGS:-}"
   export LDFLAGS="-Wl,-rpath,${CONDA_PREFIX}/lib -Wl,-rpath-link,${sysroot}/lib64 -L${sysroot}/lib64 -L${CONDA_PREFIX}/lib ${LDFLAGS:-}"
-  export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${sysroot}/lib64:${LD_LIBRARY_PATH:-}"
+  # Do not export LD_LIBRARY_PATH here — it breaks bash/git/python on the host shell.
   echo "[toolchain] Using conda $("$gxx" -dumpversion) with sysroot $(basename "$sysroot")"
   return 0
 }

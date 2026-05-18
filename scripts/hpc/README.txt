@@ -26,8 +26,11 @@ Notes
 - If setupvars.sh errors on "python_version: unbound variable", pull latest and use
   source scripts/hpc/setup_env.sh (or re-run linux_setup.sh). Or verify OpenVINO install:
   bash scripts/hpc/install_openvino_genai.sh
-- Never put conda sysroot libc on LD_LIBRARY_PATH (breaks bash/git). Backend uses
-  scripts/hpc/runtime_libs.sh loader wrapper automatically when glibc < 2.34.
+- Ubuntu 20.04 / glibc 2.31: Intel does NOT publish ubuntu20 GenAI 2026.1 archives (URL returns HTML).
+  Install ubuntu22 via install_openvino_genai.sh, then run inside Ubuntu 22:
+    bash scripts/hpc/run_in_ubuntu22.sh
+  Or upgrade OS / use a 22.04+ node. Host-native acoulm start needs glibc >= 2.34.
+- Never put conda sysroot libc on LD_LIBRARY_PATH (breaks bash/git).
 - Broken shell after bad LD_LIBRARY_PATH:  unset LD_LIBRARY_PATH;  env -i HOME=$HOME PATH=/usr/bin:/bin bash
 - Prefer OpenVINO IR folders over GGUF on HPC for faster loads.
 - API listens on 0.0.0.0:8000 inside the job (see RestAPIServer).
