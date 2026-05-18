@@ -19,7 +19,38 @@ if [[ -z "${OpenVINO_DIR:-}" && -z "${OPENVINO_GENAI_DIR:-}" && -z "${INTEL_OPEN
   exit 1
 fi
 
-command -v cmake >/dev/null 2>&1 || { echo "[build.sh] cmake not found" >&2; exit 1; }
+cmake_version_ge() {
+  python3 - "$1" "$2" <<'PY'
+import sys
+def parse(v):
+    return tuple(int(x) for x in v.split(".")[:3])
+a, b = parse(sys.argv[1]), parse(sys.argv[2])
+sys.exit(0 if a >= b else 1)
+PY
+}
+
+ensure_cmake_318() {
+  # Prefer conda cmake when system /usr/bin is too old (common on HPC login nodes).
+  if [[ -n "${CONDA_PREFIX:-}" && -x "${CONDA_PREFIX}/bin/cmake" ]]; then
+    export PATH="${CONDA_PREFIX}/bin:${PATH}"
+  fi
+  command -v cmake >/dev/null 2>&1 || {
+    echo "[build.sh] cmake not found" >&2
+    return 1
+  }
+  local ver
+  ver="$(cmake --version | head -1 | awk '{print $3}')"
+  if cmake_version_ge "$ver" "3.18.0"; then
+    echo "[build.sh] cmake $ver"
+    return 0
+  fi
+  echo "[build.sh] cmake $ver is too old (need >= 3.18)." >&2
+  echo "[build.sh] On the cluster with conda:  conda install -c conda-forge 'cmake>=3.18'" >&2
+  echo "[build.sh] Or: module avail cmake && module load cmake/3.28  (site-specific)" >&2
+  return 1
+}
+
+ensure_cmake_318
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc 2>/dev/null || echo 4)"

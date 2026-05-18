@@ -10,6 +10,7 @@ AcouLM on a remote supercomputer (Linux + SLURM)
    Edit OPENVINO_GENAI_DIR and ACOULM_MODEL (model on scratch).
 
 4) source scripts/hpc/setup_env.sh && ./build.sh
+   (needs cmake >= 3.18; if login node has 3.16: conda install -c conda-forge 'cmake>=3.18')
 
 5) sbatch scripts/hpc/slurm_acoulm.sbatch
 
