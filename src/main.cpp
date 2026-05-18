@@ -843,11 +843,8 @@ int main(int argc, char** argv) {
     }
 
     // Proves which binary is running (useful when you have build/ vs dist/)
-    char exePath[MAX_PATH]{0};
-    GetModuleFileNameA(nullptr, exePath, MAX_PATH);
-
     logline("=== RUN START ===");
-    logline(std::string("EXE: ") + exePath);
+    logline(std::string("EXE: ") + acoulm::executable_path().string());
 
     std::cout << "MAIN STARTED\n" << std::flush;
     logline("MAIN STARTED");

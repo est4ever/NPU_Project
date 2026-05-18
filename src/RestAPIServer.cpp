@@ -20,8 +20,22 @@
 #include <cstdlib>
 #include <set>
 #include <openvino/openvino.hpp>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <codecvt>
+#include <locale>
+#endif
 #include "../OpenVINO/Backend/KVCacheMonitor.h"
+#ifdef _MSC_VER
 #pragma comment(lib, "Psapi.lib")
+#endif
 
 using json = nlohmann::json;
 
@@ -336,6 +350,7 @@ std::string utf16le_to_utf8(const std::string& raw) {
     if (raw.size() < 2 || (raw.size() % 2) != 0) {
         return "";
     }
+#ifdef _WIN32
     std::wstring wide;
     wide.reserve(raw.size() / 2);
     for (size_t i = 0; i + 1 < raw.size(); i += 2) {
@@ -359,6 +374,27 @@ std::string utf16le_to_utf8(const std::string& raw) {
         return "";
     }
     return out;
+#else
+    std::u16string u16;
+    u16.reserve(raw.size() / 2);
+    for (size_t i = 0; i + 1 < raw.size(); i += 2) {
+        const unsigned char lo = static_cast<unsigned char>(raw[i]);
+        const unsigned char hi = static_cast<unsigned char>(raw[i + 1]);
+        u16.push_back(static_cast<char16_t>((hi << 8) | lo));
+    }
+    if (!u16.empty() && u16.front() == 0xFEFF) {
+        u16.erase(u16.begin());
+    }
+    if (u16.empty()) {
+        return "";
+    }
+    try {
+        std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> conv;
+        return conv.to_bytes(u16);
+    } catch (...) {
+        return "";
+    }
+#endif
 }
 
 json parse_registry_text(const std::string& raw) {

@@ -11,6 +11,7 @@ namespace acoulm {
 
 int64_t process_id();
 void set_env_var(const std::string& key, const std::string& value);
+std::filesystem::path executable_path();
 std::filesystem::path executable_directory();
 std::filesystem::path detect_project_root();
 std::optional<nlohmann::json> current_process_memory_json();
