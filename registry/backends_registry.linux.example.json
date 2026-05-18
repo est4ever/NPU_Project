@@ -8,6 +8,13 @@
       "entrypoint": "dist/npu_wrapper",
       "formats": ["openvino", "gguf"],
       "status": "ready"
+    },
+    {
+      "id": "cuda-llama",
+      "type": "external",
+      "entrypoint": "scripts/hpc/launch_cuda_llm.sh",
+      "formats": ["gguf"],
+      "status": "ready"
     }
   ]
 }

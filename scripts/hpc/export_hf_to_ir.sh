@@ -67,16 +67,30 @@ EXPORT_ENV="${ACOULM_EXPORT_ENV:-${ACOULM_EXPORT_VENV:-$HOME/acoulm-export-env}}
 PYTHON="$EXPORT_ENV/bin/python"
 
 install_qwen35_export_stack() {
-  # optimum-intel main + transformers 5.x (see optimum-intel PR #1689). Do not install both
-  # in one pip line — PyPI metadata still pins transformers<4.58 on older releases.
+  # Qwen3.5/3.6: transformers 5.2 + optimum + optimum-intel from GitHub (PR #1689).
+  # PyPI "optimum" is too old (no optimum.exporters.onnx); do not install optimum-intel with deps
+  # in one line or pip downgrades transformers.
   "$PYTHON" -m pip install -q -U pip wheel
-  "$PYTHON" -m pip install -q -U "torch" --index-url https://download.pytorch.org/whl/cpu 2>/dev/null \
-    || "$PYTHON" -m pip install -q -U "torch"
+  # torch + torchvision must come from the same PyTorch wheel index (mixed installs break torchvision::nms).
+  "$PYTHON" -m pip install -q -U "torch" "torchvision" \
+    --index-url https://download.pytorch.org/whl/cpu
   "$PYTHON" -m pip install -q -U \
     "transformers==5.2.0" \
-    "openvino" "optimum" "nncf" "huggingface_hub" "onnx" "sentencepiece"
+    "openvino" "openvino-tokenizers" "nncf" "huggingface_hub" \
+    "onnx" "onnxscript" "onnxruntime" "requests" \
+    "sentencepiece" "numpy" "packaging" "protobuf" "sympy" \
+    "opencv-python-headless"
+  # Optimum 2.x split ONNX into optimum-onnx (provides optimum.exporters.onnx).
+  "$PYTHON" -m pip install -q -U --no-deps \
+    "git+https://github.com/huggingface/optimum.git"
+  "$PYTHON" -m pip install -q -U --no-deps \
+    "git+https://github.com/huggingface/optimum-onnx.git"
   "$PYTHON" -m pip install -q -U --no-deps \
     "git+https://github.com/huggingface/optimum-intel.git"
+  if ! "$PYTHON" -c "from optimum.exporters.onnx.config import OnnxConfig" 2>/dev/null; then
+    echo "[export] optimum.exporters.onnx missing — install optimum-onnx from GitHub" >&2
+    exit 1
+  fi
 }
 
 EXPORT_TASK="text-generation-with-past"
