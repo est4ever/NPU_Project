@@ -14,6 +14,15 @@ fi
 # shellcheck source=scripts/hpc/openvino_env.sh
 source "$ROOT/scripts/hpc/openvino_env.sh"
 
+# HPC paths (gitignored) — same as setup_env.sh
+if [[ -f "$ROOT/scripts/hpc/local_env.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$ROOT/scripts/hpc/local_env.sh"
+fi
+if [[ -z "${OPENVINO_GENAI_DIR:-}" && -f "${HOME}/openvino_genai/setupvars.sh" ]]; then
+  export OPENVINO_GENAI_DIR="${HOME}/openvino_genai"
+fi
+
 if [[ -f "${OPENVINO_GENAI_DIR:-}/setupvars.sh" ]]; then
   source_openvino_setupvars "${OPENVINO_GENAI_DIR}"
 elif [[ -f "${INTEL_OPENVINO_DIR:-}/setupvars.sh" ]]; then
@@ -33,8 +42,9 @@ if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then
 fi
 
 if [[ -z "${OpenVINO_DIR:-}" && -z "${OPENVINO_GENAI_DIR:-}" && -z "${INTEL_OPENVINO_DIR:-}" ]]; then
-  echo "[build.sh] Set OPENVINO_GENAI_DIR (or INTEL_OPENVINO_DIR) to your OpenVINO GenAI Linux root, then:" >&2
-  echo "  source \"\$OPENVINO_GENAI_DIR/setupvars.sh\"" >&2
+  echo "[build.sh] Set OPENVINO_GENAI_DIR (or INTEL_OPENVINO_DIR) to your OpenVINO GenAI Linux root." >&2
+  echo "[build.sh] Easiest:  echo 'export OPENVINO_GENAI_DIR=\$HOME/openvino_genai' >> scripts/hpc/local_env.sh" >&2
+  echo "[build.sh] Or:       source scripts/hpc/setup_env.sh && ./build.sh" >&2
   exit 1
 fi
 
