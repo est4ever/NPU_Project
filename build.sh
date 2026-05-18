@@ -21,9 +21,14 @@ fi
 
 cmake_version_ge() {
   python3 - "$1" "$2" <<'PY'
-import sys
+import re, sys
+
 def parse(v):
-    return tuple(int(x) for x in v.split(".")[:3])
+    m = re.match(r"^(\d+)\.(\d+)\.(\d+)", str(v).strip())
+    if not m:
+        return (0, 0, 0)
+    return tuple(int(x) for x in m.groups())
+
 a, b = parse(sys.argv[1]), parse(sys.argv[2])
 sys.exit(0 if a >= b else 1)
 PY
