@@ -37,20 +37,28 @@ void set_env_var(const std::string& key, const std::string& value) {
 #endif
 }
 
-std::filesystem::path executable_directory() {
+std::filesystem::path executable_path() {
 #ifdef _WIN32
     char exe_path[MAX_PATH]{};
     const DWORD len = GetModuleFileNameA(nullptr, exe_path, static_cast<DWORD>(sizeof(exe_path)));
     if (len > 0 && len < sizeof(exe_path)) {
-        return std::filesystem::path(std::string(exe_path)).parent_path();
+        return std::filesystem::path(std::string(exe_path));
     }
 #else
     std::error_code ec;
     const auto link = std::filesystem::read_symlink("/proc/self/exe", ec);
     if (!ec) {
-        return link.parent_path();
+        return link;
     }
 #endif
+    return std::filesystem::current_path();
+}
+
+std::filesystem::path executable_directory() {
+    const auto path = executable_path();
+    if (!path.empty()) {
+        return path.parent_path();
+    }
     return std::filesystem::current_path();
 }
 
