@@ -141,6 +141,22 @@ else
   MODEL_ID="$(basename "$EXISTING")"
   if find "$EXISTING" -maxdepth 2 -name '*.gguf' -print -quit 2>/dev/null | grep -q .; then
     MODEL_FORMAT="gguf"
+  elif [[ -f "$EXISTING/config.json" ]] && ! find "$EXISTING" -maxdepth 2 -name 'openvino*.xml' -print -quit 2>/dev/null | grep -q .; then
+    MODEL_FORMAT="openvino"
+    IR_DIR="${EXISTING}-ov-ir"
+    if [[ -f "$IR_DIR/openvino_model.xml" ]] || find "$IR_DIR" -maxdepth 2 -name 'openvino*.xml' -print -quit 2>/dev/null | grep -q .; then
+      MODEL_PATH="./models/$(basename "$IR_DIR")"
+      MODEL_ID="$(basename "$IR_DIR")"
+      echo "   Found OpenVINO IR: $IR_DIR"
+    else
+      echo ""
+      echo "   NOTE: $EXISTING is Hugging Face weights (.safetensors)."
+      echo "   acoulm start needs OpenVINO IR — export once:"
+      echo "     bash scripts/hpc/export_hf_to_ir.sh \"$EXISTING\" \"$IR_DIR\" int4"
+      echo "   Then set ACOULM_MODEL to the *-ov-ir folder (or re-run setup after export)."
+      MODEL_PATH="./models/$(basename "$IR_DIR")"
+      MODEL_ID="$(basename "$IR_DIR")"
+    fi
   fi
 fi
 
