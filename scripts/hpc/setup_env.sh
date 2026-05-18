@@ -7,8 +7,6 @@ export ACOULM_HOME="${ACOULM_HOME:-$ACOULM_ROOT}"
 cd "$ACOULM_HOME"
 # shellcheck source=openvino_env.sh
 source "$(dirname "${BASH_SOURCE[0]}")/openvino_env.sh"
-# shellcheck source=runtime_libs.sh
-source "$(dirname "${BASH_SOURCE[0]}")/runtime_libs.sh"
 
 if [[ ! -f "${ACOULM_HOME}/registry/backends_registry.json" ]]; then
   echo "[hpc] Run ./hpc-setup.sh first (creates registry files)." >&2
@@ -92,8 +90,6 @@ export OV_CACHE_DIR="${OV_CACHE_DIR:-${ACOULM_HOME}/gpu_cache}"
 if [[ -n "${OPENVINO_GENAI_DIR:-}" && -f "${OPENVINO_GENAI_DIR}/setupvars.sh" ]]; then
   source_openvino_setupvars "${OPENVINO_GENAI_DIR}"
 fi
-
-hpc_export_runtime_ldpath
 
 _reg_id="$(python3 -c "
 import json, os

@@ -26,6 +26,9 @@ Notes
 - If setupvars.sh errors on "python_version: unbound variable", pull latest and use
   source scripts/hpc/setup_env.sh (or re-run linux_setup.sh). Or verify OpenVINO install:
   bash scripts/hpc/install_openvino_genai.sh
+- Never put conda sysroot libc on LD_LIBRARY_PATH (breaks bash/git). Backend uses
+  scripts/hpc/runtime_libs.sh loader wrapper automatically when glibc < 2.34.
+- Broken shell after bad LD_LIBRARY_PATH:  unset LD_LIBRARY_PATH;  env -i HOME=$HOME PATH=/usr/bin:/bin bash
 - Prefer OpenVINO IR folders over GGUF on HPC for faster loads.
 - API listens on 0.0.0.0:8000 inside the job (see RestAPIServer).
 - Windows scripts (acoulm.ps1, start_app.ps1) are not used on the cluster.
