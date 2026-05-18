@@ -1,9 +1,18 @@
 #include "SpeculativeEngine.h"
 #include <openvino/genai/llm_pipeline.hpp>
-#include <openvino/genai/speculative_decoding/perf_metrics.hpp>
 #include <iostream>
 #include <chrono>
 #include <memory>
+
+#if defined(__has_include)
+#if __has_include(<openvino/genai/speculative_decoding/perf_metrics.hpp>)
+#include <openvino/genai/speculative_decoding/perf_metrics.hpp>
+#define ACOULM_OV_GENAI_SD_METRICS 1
+#endif
+#endif
+#ifndef ACOULM_OV_GENAI_SD_METRICS
+#define ACOULM_OV_GENAI_SD_METRICS 0
+#endif
 
 void SpeculativeEngine::load_models(
     const std::string& draft_model_path,
@@ -62,12 +71,13 @@ SpeculativeRunResult SpeculativeEngine::generate_stream(
         auto generation_result = pipe.generate(prompt, config, streamer);
         std::cout << "\n";
 
-        // Extract speculative decoding metrics
+#if ACOULM_OV_GENAI_SD_METRICS
+        // Extract speculative decoding metrics (OpenVINO GenAI 2026+)
         if (generation_result.extended_perf_metrics) {
             auto sd_metrics = std::dynamic_pointer_cast<ov::genai::SDPerModelsPerfMetrics>(
                 generation_result.extended_perf_metrics
             );
-            
+
             if (sd_metrics) {
                 // Successfully obtained speculative metrics
                 int64_t num_accepted = sd_metrics->get_num_accepted_tokens();
@@ -77,7 +87,7 @@ SpeculativeRunResult SpeculativeEngine::generate_stream(
                 result.generated_tokens = num_main_generated;
                 result.proposed_tokens = num_draft_generated;
                 result.accepted_tokens = num_accepted;
-                result.accept_rate = num_draft_generated > 0 
+                result.accept_rate = num_draft_generated > 0
                     ? static_cast<double>(num_accepted) / static_cast<double>(num_draft_generated)
                     : 0.0;
                 result.active = true;
@@ -105,11 +115,27 @@ SpeculativeRunResult SpeculativeEngine::generate_stream(
             result.accepted_tokens = 0;
             result.accept_rate = 0.0;
         }
+#else
+        (void)generation_result;
+        (void)disable_on_low_accept;
+        (void)min_accept;
+        // OpenVINO GenAI 2025.x: no speculative_decoding/perf_metrics.hpp — generation still ran above.
+        result.active = true;
+        result.disabled_reason = std::nullopt;
+        result.generated_tokens = 0;
+        result.proposed_tokens = 0;
+        result.accepted_tokens = 0;
+        result.accept_rate = 0.0;
+#endif
 
         // Populate last_metrics for NDJSON emission
         last_metrics = BackendMetrics();
         last_metrics.generated_tokens = result.generated_tokens;
+#if ACOULM_OV_GENAI_SD_METRICS
         last_metrics.generated_tokens_source = TokenCountSource::OpenVinoNative;
+#else
+        last_metrics.generated_tokens_source = TokenCountSource::Unknown;
+#endif
         last_metrics.prompt_tokens = std::nullopt;
         last_metrics.prompt_tokens_source = TokenCountSource::Unknown;
         last_metrics.valid = true;
