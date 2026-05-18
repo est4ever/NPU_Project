@@ -18,6 +18,7 @@ import argparse
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -46,6 +47,28 @@ def find_gguf(model_arg: str) -> Path:
                 "  Example: huggingface-cli download ... *.gguf"
             )
     sys.exit(f"[cuda] No .gguf found at {p}")
+
+
+def port_is_free(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, port))
+            return True
+        except OSError:
+            return False
+
+
+def pick_llama_port(acoulm_port: int) -> int:
+    if os.environ.get("LLAMA_PORT"):
+        return int(os.environ["LLAMA_PORT"])
+    # Avoid acoulm_port+1 (8001) — often left occupied by a stale llama-server.
+    for candidate in (acoulm_port + 10000, 28081, 18081, acoulm_port + 1):
+        if port_is_free("127.0.0.1", candidate):
+            return candidate
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 def find_llama_server() -> str:
@@ -119,6 +142,11 @@ class ProxyState:
                 sys.exit(f"[cuda] llama-server exited with code {self.proc.returncode}")
             try:
                 urllib.request.urlopen(f"{self.llama_base}/health", timeout=2)
+                if self.proc and self.proc.poll() is not None:
+                    sys.exit(
+                        f"[cuda] llama-server died during startup (exit {self.proc.returncode}). "
+                        "Check [llama] lines above (port in use? run: pkill -f llama-server)."
+                    )
                 self.ready = True
                 print("[cuda] llama-server is ready")
                 return
@@ -240,7 +268,7 @@ def main() -> None:
 
     gguf = find_gguf(args.model)
     acoulm_port = args.port
-    llama_port = int(os.environ.get("LLAMA_PORT", str(acoulm_port + 1)))
+    llama_port = pick_llama_port(acoulm_port)
     ACOULM_PORT = acoulm_port
 
     devices = os.environ.get("ACOULM_CUDA_DEVICES", "")
