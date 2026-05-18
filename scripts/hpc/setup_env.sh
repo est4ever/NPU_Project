@@ -7,6 +7,8 @@ export ACOULM_HOME="${ACOULM_HOME:-$ACOULM_ROOT}"
 cd "$ACOULM_HOME"
 # shellcheck source=openvino_env.sh
 source "$(dirname "${BASH_SOURCE[0]}")/openvino_env.sh"
+# shellcheck source=runtime_libs.sh
+source "$(dirname "${BASH_SOURCE[0]}")/runtime_libs.sh"
 
 if [[ ! -f "${ACOULM_HOME}/registry/backends_registry.json" ]]; then
   echo "[hpc] Run ./hpc-setup.sh first (creates registry files)." >&2
@@ -70,6 +72,15 @@ PY
   fi
   unset _reg_model
 fi
+# Absolute model path for run.sh (avoid ././ under ACOULM_HOME)
+if [[ -n "${ACOULM_MODEL:-}" ]]; then
+  if [[ "$ACOULM_MODEL" == ./* ]]; then
+    ACOULM_MODEL="${ACOULM_HOME}/${ACOULM_MODEL#./}"
+  elif [[ "$ACOULM_MODEL" != /* ]]; then
+    ACOULM_MODEL="${ACOULM_HOME}/${ACOULM_MODEL}"
+  fi
+  export ACOULM_MODEL="$(python3 -c "import os; print(os.path.normpath('''${ACOULM_MODEL}'''))")"
+fi
 export ACOULM_PORT="${ACOULM_PORT:-8000}"
 
 # OpenVINO GenAI root (required for build.sh / run.sh)
@@ -81,6 +92,8 @@ export OV_CACHE_DIR="${OV_CACHE_DIR:-${ACOULM_HOME}/gpu_cache}"
 if [[ -n "${OPENVINO_GENAI_DIR:-}" && -f "${OPENVINO_GENAI_DIR}/setupvars.sh" ]]; then
   source_openvino_setupvars "${OPENVINO_GENAI_DIR}"
 fi
+
+hpc_export_runtime_ldpath
 
 _reg_id="$(python3 -c "
 import json, os
