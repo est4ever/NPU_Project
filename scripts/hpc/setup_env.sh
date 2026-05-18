@@ -17,7 +17,22 @@ fi
 if [[ -f "$(dirname "$0")/local_env.sh" ]]; then
   # shellcheck source=/dev/null
   source "$(dirname "$0")/local_env.sh"
+elif [[ -f "$(dirname "$0")/local_env.example.sh" ]]; then
+  echo "[hpc] Tip: copy scripts/hpc/local_env.example.sh to scripts/hpc/local_env.sh" >&2
+  echo "[hpc]   Or re-run: bash scripts/hpc/linux_setup.sh" >&2
 fi
+
+# Default OpenVINO GenAI root from linux_setup / install_openvino_genai.sh
+if [[ -z "${OPENVINO_GENAI_DIR:-}" && -f "${HOME}/openvino_genai/setupvars.sh" ]]; then
+  export OPENVINO_GENAI_DIR="${HOME}/openvino_genai"
+fi
+
+# Git clone on Windows often drops +x on shell scripts
+for _exe in build.sh run.sh hpc-setup.sh portable_setup.sh npu_cli.sh restart_backend.sh restart_stack.sh; do
+  if [[ -f "${ACOULM_HOME}/${_exe}" && ! -x "${ACOULM_HOME}/${_exe}" ]]; then
+    chmod +x "${ACOULM_HOME}/${_exe}"
+  fi
+done
 
 # Example module lines (uncomment / edit for your supercomputer):
 # module purge
