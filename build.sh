@@ -87,8 +87,9 @@ fi
 cp -f "$BIN" dist/npu_wrapper
 chmod +x dist/npu_wrapper
 
-# Stage OpenVINO runtime libs next to the binary when using a local GenAI tree.
+# Stage OpenVINO runtime libs next to the binary (Linux: replace stale copies when switching OV version).
 if [[ -n "${OPENVINO_GENAI_DIR:-}" && -d "${OPENVINO_GENAI_DIR}/runtime/lib/intel64" ]]; then
+  rm -f dist/libopenvino*.so* dist/libopenvino*.so dist/libtbb*.so* dist/libhwloc*.so* 2>/dev/null || true
   cp -a "${OPENVINO_GENAI_DIR}/runtime/lib/intel64/"*.so* dist/ 2>/dev/null || true
 fi
 

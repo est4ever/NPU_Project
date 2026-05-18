@@ -1,25 +1,12 @@
 #!/usr/bin/env bash
-# Run OpenVINO 2026.1 on hosts with glibc < 2.34 WITHOUT poisoning LD_LIBRARY_PATH
-# (never put conda sysroot libc on LD_LIBRARY_PATH — it breaks bash, python, git).
+# Run OpenVINO GenAI without putting conda libc on LD_LIBRARY_PATH (breaks bash/git).
 
-_hpc_glibc_max() {
-  local libc="${1:-/lib/x86_64-linux-gnu/libc.so.6}"
-  [[ -f "$libc" ]] || { echo "0.0"; return; }
-  strings "$libc" 2>/dev/null | sed -n 's/^GLIBC_//p' | sort -Vu | tail -1
-}
+# shellcheck source=glibc_util.sh
+source "$(dirname "${BASH_SOURCE[0]}")/glibc_util.sh"
 
-_hpc_ver_ge() {
-  python3 - "$1" "$2" <<'PY'
-import sys
-def p(v):
-    return tuple(int(x) for x in v.split(".")[:3])
-sys.exit(0 if p(sys.argv[1]) >= p(sys.argv[2]) else 1)
-PY
-}
-
-# OpenVINO + dist only — safe to export for a single backend process if needed.
 hpc_openvino_library_path() {
   local parts=()
+  # Prefer GenAI install over dist/*.so (dist may hold stale OpenVINO from an older build).
   if [[ -n "${OPENVINO_GENAI_DIR:-}" && -d "${OPENVINO_GENAI_DIR}/runtime/lib/intel64" ]]; then
     parts+=("${OPENVINO_GENAI_DIR}/runtime/lib/intel64")
   fi
@@ -34,36 +21,64 @@ hpc_openvino_library_path() {
   echo "$joined"
 }
 
-# Exec backend only — uses conda sysroot dynamic linker when host glibc is too old.
+hpc_sysroot_glibc_max() {
+  local sysroot="${CONDA_PREFIX:-}/x86_64-conda-linux-gnu/sysroot/lib64/libc.so.6"
+  if [[ -f "$sysroot" ]]; then
+    hpc_glibc_max "$sysroot"
+  else
+    echo "0.0"
+  fi
+}
+
 hpc_exec_backend() {
   local target="$1"
   shift
 
   local ov_path
   ov_path="$(hpc_openvino_library_path)"
-  local glibc_max
-  glibc_max="$(_hpc_glibc_max)"
+  local host_glibc
+  host_glibc="$(hpc_glibc_max)"
 
-  if _hpc_ver_ge "${glibc_max:-0.0}" "2.34"; then
+  if hpc_ver_ge "${host_glibc:-0.0}" "2.34"; then
     if [[ -n "$ov_path" ]]; then
       export LD_LIBRARY_PATH="${ov_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     fi
     exec "$target" "$@"
   fi
 
-  local sysroot="${CONDA_PREFIX:-}/x86_64-conda-linux-gnu/sysroot/lib64"
-  local loader="${sysroot}/ld-linux-x86-64.so.2"
-  if [[ ! -x "$loader" ]]; then
-    echo "[hpc] ERROR: host glibc ${glibc_max} < 2.34 and no conda sysroot loader." >&2
-    echo "[hpc]   conda install -c conda-forge gcc_linux-64=12 gxx_linux-64=12 sysroot_linux-64" >&2
-    echo "[hpc]   Or run on a node with glibc >= 2.34 (Ubuntu 22.04+)." >&2
-    return 1
+  # Host glibc < 2.34: prefer OpenVINO *ubuntu20* build (matches Ubuntu 20.04 / glibc 2.31).
+  if hpc_ver_ge "${host_glibc:-0.0}" "2.31"; then
+    if [[ -n "$ov_path" ]]; then
+      export LD_LIBRARY_PATH="${ov_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
+    echo "[hpc] Using system loader (glibc ${host_glibc}); OpenVINO must be ubuntu20 build." >&2
+    exec "$target" "$@"
   fi
 
-  local lp="${sysroot}:${CONDA_PREFIX}/lib"
-  if [[ -n "$ov_path" ]]; then
-    lp="${lp}:${ov_path}"
+  local sysroot="${CONDA_PREFIX:-}/x86_64-conda-linux-gnu/sysroot/lib64"
+  local loader="${sysroot}/ld-linux-x86-64.so.2"
+  local sys_glibc
+  sys_glibc="$(hpc_sysroot_glibc_max)"
+
+  if [[ -x "$loader" ]] && hpc_ver_ge "${sys_glibc:-0.0}" "2.34"; then
+    local lp="${sysroot}:${CONDA_PREFIX}/lib"
+    if [[ -n "$ov_path" ]]; then
+      lp="${lp}:${ov_path}"
+    fi
+    echo "[hpc] Launching via conda sysroot loader (host ${host_glibc}, sysroot ${sys_glibc})" >&2
+    exec "$loader" --library-path "$lp" "$target" "$@"
   fi
-  echo "[hpc] Launching backend via conda sysroot loader (host glibc ${glibc_max} < 2.34)" >&2
-  exec "$loader" --library-path "$lp" "$target" "$@"
+
+  cat >&2 <<EOF
+[hpc] ERROR: Cannot run OpenVINO 2026.1 on this machine (host glibc ${host_glibc}).
+
+Fix (recommended): install the Ubuntu 20 OpenVINO GenAI archive (not ubuntu22):
+  rm -rf "\${HOME}/openvino_genai"
+  bash scripts/hpc/install_openvino_genai.sh
+
+Then: source scripts/hpc/setup_env.sh && acoulm start
+
+Your conda sysroot glibc is ${sys_glibc} (need >= 2.34 for ubuntu22 libs).
+EOF
+  return 1
 }

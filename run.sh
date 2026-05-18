@@ -10,7 +10,7 @@ export ACOULM_HOME="${ACOULM_HOME:-$ROOT}"
 # shellcheck source=scripts/hpc/openvino_env.sh
 source "$ROOT/scripts/hpc/openvino_env.sh"
 # shellcheck source=scripts/hpc/runtime_libs.sh
-source "$ROOT/scripts/hpc/runtime_libs.sh"
+source "$ROOT/scripts/hpc/runtime_libs.sh"  # defines hpc_exec_backend
 
 if [[ -f "${OPENVINO_GENAI_DIR:-}/setupvars.sh" ]]; then
   source_openvino_setupvars "${OPENVINO_GENAI_DIR}"
