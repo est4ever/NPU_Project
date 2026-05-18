@@ -67,6 +67,15 @@ hpc_ensure_toolchain() {
   glibc_max="$(_hpc_glibc_max)"
   echo "[toolchain] Host glibc max: ${glibc_max:-unknown}"
 
+  # OpenVINO GenAI *ubuntu20* archives (e.g. 2025.2) link against host glibc 2.31 — no conda sysroot.
+  if _hpc_ver_ge "${glibc_max:-0.0}" "2.31" && ! _hpc_ver_ge "${glibc_max:-0.0}" "2.34"; then
+    export CC="${CC:-gcc}"
+    export CXX="${CXX:-g++}"
+    unset CONDA_BUILD_SYSROOT 2>/dev/null || true
+    echo "[toolchain] glibc ${glibc_max} (Ubuntu 20 class) — using system GCC for OpenVINO ubuntu20 packages (skip conda sysroot)."
+    return 0
+  fi
+
   if _hpc_ver_ge "${glibc_max:-0.0}" "2.34"; then
     if _hpc_try_module_gcc; then
       :
@@ -74,11 +83,11 @@ hpc_ensure_toolchain() {
       export CXX="${CXX:-g++}"
       export CC="${CC:-gcc}"
     fi
-    echo "[toolchain] Host glibc is new enough for OpenVINO 2026.1."
+    echo "[toolchain] Host glibc is new enough for OpenVINO ubuntu22 / 2026.x archives."
     return 0
   fi
 
-  echo "[toolchain] Host glibc < 2.34 — OpenVINO 2026.1 ubuntu22 binaries need a newer toolchain/sysroot." >&2
+  echo "[toolchain] Host glibc ${glibc_max} < 2.31 — need newer host or conda sysroot for prebuilt OpenVINO." >&2
 
   if _hpc_try_module_gcc && _hpc_ver_ge "$(_hpc_glibc_max)" "2.34"; then
     echo "[toolchain] Loaded module gcc with adequate glibc."
@@ -90,16 +99,12 @@ hpc_ensure_toolchain() {
   fi
 
   cat >&2 <<'EOF'
-[toolchain] Cannot link OpenVINO GenAI 2026.1 on this node.
+[toolchain] Cannot prepare a toolchain for this OpenVINO build.
 
-Options:
-  1) conda install -c conda-forge gcc_linux-64=12 gxx_linux-64=12 sysroot_linux-64
-     then: source scripts/hpc/setup_env.sh && ./build.sh
-  2) module load gcc/12 (or newer) if your site provides it
-  3) Build inside Ubuntu 22.04+ (Apptainer/Singularity) or on a newer login node
-  4) Run jobs on compute nodes with glibc >= 2.34 (runtime must match)
+If you use OpenVINO ubuntu22 (glibc >= 2.34): install conda gcc/sysroot or use Ubuntu 22.04+.
+If you use OpenVINO ubuntu20: host needs glibc >= 2.31 (Ubuntu 20.04+).
 
-Check: strings /lib/x86_64-linux-gnu/libc.so.6 | grep GLIBC_2.34
+Check: getconf GNU_LIBC_VERSION
 EOF
   return 1
 }

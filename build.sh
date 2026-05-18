@@ -4,6 +4,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
+
+# Poisoned LD_LIBRARY_PATH (conda sysroot) breaks cmake, basename, and glibc detection.
+if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then
+  echo "[build.sh] Unsetting inherited LD_LIBRARY_PATH (conda sysroot breaks host tools)." >&2
+  unset LD_LIBRARY_PATH
+fi
+
 # shellcheck source=scripts/hpc/openvino_env.sh
 source "$ROOT/scripts/hpc/openvino_env.sh"
 
@@ -11,6 +18,18 @@ if [[ -f "${OPENVINO_GENAI_DIR:-}/setupvars.sh" ]]; then
   source_openvino_setupvars "${OPENVINO_GENAI_DIR}"
 elif [[ -f "${INTEL_OPENVINO_DIR:-}/setupvars.sh" ]]; then
   source_openvino_setupvars "${INTEL_OPENVINO_DIR}"
+fi
+
+# setupvars may prepend long LD_LIBRARY_PATH; conda sysroot entries break host cmake — drop them.
+if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then
+  _lp_clean=""
+  IFS=':' read -ra _lp_parts <<<"${LD_LIBRARY_PATH}"
+  for _p in "${_lp_parts[@]}"; do
+    [[ "$_p" == *conda-linux-gnu/sysroot* ]] && continue
+    [[ -z "$_p" ]] && continue
+    _lp_clean="${_lp_clean:+${_lp_clean}:}${_p}"
+  done
+  export LD_LIBRARY_PATH="${_lp_clean}"
 fi
 
 if [[ -z "${OpenVINO_DIR:-}" && -z "${OPENVINO_GENAI_DIR:-}" && -z "${INTEL_OPENVINO_DIR:-}" ]]; then
@@ -24,10 +43,11 @@ cmake_version_ge() {
 import re, sys
 
 def parse(v):
-    m = re.match(r"^(\d+)\.(\d+)\.(\d+)", str(v).strip())
+    m = re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?", str(v).strip())
     if not m:
         return (0, 0, 0)
-    return tuple(int(x) for x in m.groups())
+    a, b, c = int(m.group(1)), int(m.group(2)), int(m.group(3) or 0)
+    return (a, b, c)
 
 a, b = parse(sys.argv[1]), parse(sys.argv[2])
 sys.exit(0 if a >= b else 1)

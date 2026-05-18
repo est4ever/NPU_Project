@@ -1,34 +1,37 @@
 #!/usr/bin/env bash
-# glibc version — use libc.so.6 self-report (reliable). Never use `strings | sed s/^GLIBC_/`
-# because GLIBC_PRIVATE becomes "PRIVATE" and breaks comparisons.
+# glibc version — prefer getconf (no exec, not affected by LD_LIBRARY_PATH).
+# Do not use `strings | sed s/^GLIBC_/` (GLIBC_PRIVATE -> "PRIVATE").
 
 hpc_glibc_max() {
-  local libc="${1:-/lib/x86_64-linux-gnu/libc.so.6}"
-  if [[ ! -f "$libc" ]]; then
-    echo "0.0"
-    return
-  fi
-  # Running libc.so.6 prints e.g. "GNU C Library (Ubuntu GLIBC 2.31-0ubuntu9.9) ..."
-  local line
-  line="$("$libc" 2>&1 | head -1)"
-  if [[ "$line" =~ GLIBC[[:space:]]+([0-9]+\.[0-9]+) ]]; then
-    echo "${BASH_REMATCH[1]}"
-    return
-  fi
-  # Fallback: getconf on host default only
-  if [[ "$libc" == "/lib/x86_64-linux-gnu/libc.so.6" ]] || [[ "$libc" == "/lib64/libc.so.6" ]]; then
+  local libc="${1:-}"
+  # Host default: getconf is safest when LD_LIBRARY_PATH is poisoned.
+  if [[ -z "$libc" || "$libc" == "/lib/x86_64-linux-gnu/libc.so.6" || "$libc" == "/lib64/libc.so.6" ]]; then
     local gc
     gc="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
     if [[ "$gc" =~ ([0-9]+\.[0-9]+) ]]; then
       echo "${BASH_REMATCH[1]}"
       return
     fi
+    libc="/lib/x86_64-linux-gnu/libc.so.6"
+    [[ -f "$libc" ]] || libc="/lib64/libc.so.6"
+  fi
+
+  if [[ ! -f "$libc" ]]; then
+    echo "0.0"
+    return
+  fi
+  # Running a specific libc.so.6 prints "GNU C Library ... GLIBC 2.xx ..."
+  # Clear LD_LIBRARY_PATH for this subshell so we do not mix host ld with wrong libc.
+  local line
+  line="$(env -u LD_LIBRARY_PATH "$libc" 2>&1 | head -1)"
+  if [[ "$line" =~ GLIBC[[:space:]]+([0-9]+\.[0-9]+) ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return
   fi
   echo "0.0"
 }
 
 hpc_ver_ge() {
-  # Pure bash version compare a >= b (major.minor only)
   local a="$1" b="$2"
   local am="${a%%.*}" an="${a#*.}" bm="${b%%.*}" bn="${b#*.}"
   [[ "$an" =~ ^[0-9]+$ ]] || an=0
