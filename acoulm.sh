@@ -45,8 +45,9 @@ AcouLM (Linux / HPC)
 
   acoulm setup          Install ~/.local/bin/acoulm (PATH)
   acoulm build          Build dist/npu_wrapper
-  acoulm start          Start API on this node (needs GPU + setup_env)
-  acoulm chat [msg]     Talk to API (set ACOULM_API_BASE if tunneled)
+  acoulm start          Start API on this node (leave that terminal open)
+  acoulm chat           Interactive terminal chat
+  acoulm chat "..."     One-shot message
   acoulm status         API / model status
   acoulm cuda-setup     Build llama.cpp llama-server with CUDA (NVIDIA)
   acoulm use-cuda       Switch registry to cuda-llama backend (needs GGUF)
@@ -60,7 +61,9 @@ HPC workflow:
   sbatch scripts/hpc/slurm_acoulm.sbatch
   ssh -L 8000:<compute-node>:8000 user@cluster
   export ACOULM_API_BASE=http://127.0.0.1:8000
-  acoulm chat "Hello"
+  acoulm chat
+
+One-time:  acoulm setup   then  source ~/.bashrc   (use "acoulm", not "bash acoulm.sh")
 
 Windows UI (start_app, panel) is not used on the cluster.
 EOF
