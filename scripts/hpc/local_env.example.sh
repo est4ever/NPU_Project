@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Copy to scripts/hpc/local_env.sh and customize for your supercomputer.
+# Copy to scripts/hpc/local_env.sh and customize for your machine.
+# Daily use: run  acoulm  (starts API + browser panel + terminal chat).
 
 # module load gcc/12
 # module load cmake/3.28    # if system cmake is 3.16 (AcouLM needs >= 3.18)

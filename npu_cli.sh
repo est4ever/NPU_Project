@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Terminal client for AcouLM (status + chat). Use: acoulm chat "hello"
+# Terminal chat for AcouLM (started by bare `acoulm` on Linux / Windows npu_cli.ps1 on Windows).
 set -euo pipefail
 
 API_BASE="${ACOULM_API_BASE:-http://127.0.0.1:8000}"
@@ -17,12 +17,10 @@ api_backend() {
 
 do_chat() {
   local prompt="$1"
-  local backend
+  local backend max_tokens=96
   backend="$(api_backend)"
-  local max_tokens=32
   local extra_hdr=()
 
-  # OpenVINO npu_wrapper requires x-npu-cli; cuda-llama proxy does not.
   if [[ "$backend" != "cuda-llama" ]]; then
     extra_hdr=(-H "x-npu-cli: true")
   fi
@@ -38,7 +36,7 @@ do_chat() {
     "${extra_hdr[@]}" \
     -X POST -d "$body" \
     "${API_BASE}/v1/chat/completions")"; then
-    echo "[chat] Request failed. Is the server running? (acoulm start in another terminal)" >&2
+    echo "[chat] Request failed — run acoulm (no arguments) and wait for the model to load." >&2
     return 1
   fi
 
@@ -54,7 +52,33 @@ do_chat() {
     echo "$resp" | jq . >&2
     return 1
   fi
-  printf 'Assistant: %s\n' "$text"
+  printf '%s\n' "$text"
+}
+
+chat_loop() {
+  echo "[chat] API: $API_BASE"
+  echo "[chat] Control panel: http://127.0.0.1:${ACOULM_APP_PORT:-5173}/"
+  echo "[chat] Type a message and press Enter. Commands: /status  /exit"
+  while true; do
+    read -r -p "You: " line || break
+    [[ -z "$line" ]] && continue
+    case "$line" in
+      /exit|/quit)
+        break
+        ;;
+      /status)
+        api_get "/v1/cli/status" 2>/dev/null | jq . || api_get "/v1/health" | jq .
+        continue
+        ;;
+      /*)
+        echo "Unknown command. Use /status or /exit."
+        continue
+        ;;
+    esac
+    printf 'Assistant: '
+    do_chat "$line" || true
+    echo ""
+  done
 }
 
 case "$CMD" in
@@ -66,21 +90,13 @@ case "$CMD" in
     ;;
   chat)
     if [[ $# -eq 0 ]]; then
-      echo "AcouLM chat — API: $API_BASE (Ctrl+C to exit)"
-      echo "Start the server first: acoulm start"
-      while true; do
-        read -r -p "You: " line || break
-        [[ -z "$line" ]] && continue
-        do_chat "$line" || true
-        echo ""
-      done
+      chat_loop
     else
       do_chat "$*"
     fi
     ;;
   *)
-    echo "Usage: acoulm chat [message]   (no message = interactive)" >&2
-    echo "       acoulm status | acoulm health" >&2
+    echo "Internal: use bare acoulm for terminal chat." >&2
     exit 1
     ;;
 esac
