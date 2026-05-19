@@ -19,6 +19,14 @@ BROWSER_OPENED=0
 
 mkdir -p "$RUN_DIR"
 
+stack_curl() {
+  local extra=()
+  if [[ -n "${ACOULM_API_TOKEN:-}" ]]; then
+    extra+=(-H "Authorization: Bearer ${ACOULM_API_TOKEN}")
+  fi
+  curl -fsS "${extra[@]}" "$@"
+}
+
 acoulm_banner() {
   echo ""
   echo "      _    ____   ___   _   _  _      __  __ "
@@ -30,12 +38,12 @@ acoulm_banner() {
 }
 
 api_http_up() {
-  curl -fsS --max-time 3 "${API_BASE}/v1/health" >/dev/null 2>&1
+  stack_curl --max-time 3 "${API_BASE}/v1/health" >/dev/null 2>&1
 }
 
 api_chat_ready() {
   local ready
-  ready="$(curl -fsS --max-time 3 "${API_BASE}/v1/health" 2>/dev/null \
+  ready="$(stack_curl --max-time 3 "${API_BASE}/v1/health" 2>/dev/null \
     | jq -r 'if .chat_ready == false then "no" else "yes" end' 2>/dev/null || echo "no")"
   [[ "$ready" == "yes" ]]
 }

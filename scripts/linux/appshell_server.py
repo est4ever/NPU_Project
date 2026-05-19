@@ -6,6 +6,7 @@ Use when the browser cannot reach 127.0.0.1:8000 directly (SSH tunnel one port).
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import urllib.error
@@ -17,6 +18,10 @@ from pathlib import Path
 
 UPSTREAM = os.environ.get("ACOULM_API_UPSTREAM", "http://127.0.0.1:8000").rstrip("/")
 APP_ROOT = Path(os.environ.get("ACOULM_HOME", Path(__file__).resolve().parents[2])) / "app_shell"
+_SCRIPTS = Path(__file__).resolve().parents[1]
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+import acoulm_security as sec  # noqa: E402
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -27,18 +32,34 @@ class Handler(SimpleHTTPRequestHandler):
             super().log_message(fmt, *args)
 
     def _cors(self) -> None:
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header(
-            "Access-Control-Allow-Headers",
-            "Content-Type, Authorization, x-npu-cli",
-        )
+        sec.send_cors(self)
 
-    def do_OPTIONS(self) -> None:
-        if self.path.startswith("/v1/"):
+    def _json(self, code: int, obj: object) -> None:
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self._cors()
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _guard(self, path: str) -> bool:
+        """Return True if the request was fully handled (reject or OPTIONS)."""
+        denied = sec.check_request(self, path)
+        if denied is None:
+            return False
+        status, body = denied
+        if status == 204:
             self.send_response(204)
             self._cors()
             self.end_headers()
+            return True
+        self._json(status, body if body else {"error": {"message": "forbidden"}})
+        return True
+
+    def do_OPTIONS(self) -> None:
+        if self.path.startswith("/v1/"):
+            path = self.path.split("?", 1)[0]
+            self._guard(path)
             return
         super().do_OPTIONS()
 
@@ -73,7 +94,9 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
         except Exception as e:
-            msg = f'{{"error":{{"message":"{e}","code":"proxy_error"}}}}'.encode()
+            msg = json.dumps(
+                {"error": {"message": "upstream unreachable", "code": "proxy_error", "detail": str(e)}}
+            ).encode()
             self.send_response(502)
             self.send_header("Content-Type", "application/json")
             self._cors()
@@ -82,13 +105,17 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path.startswith("/v1/"):
-            self._proxy()
+            path = self.path.split("?", 1)[0]
+            if not self._guard(path):
+                self._proxy()
             return
         super().do_GET()
 
     def do_POST(self) -> None:
         if self.path.startswith("/v1/"):
-            self._proxy()
+            path = self.path.split("?", 1)[0]
+            if not self._guard(path):
+                self._proxy()
             return
         self.send_error(405)
 
@@ -107,9 +134,11 @@ def main() -> None:
     UPSTREAM = args.upstream.rstrip("/")
     if not APP_ROOT.is_dir():
         sys.exit(f"[appshell] Missing app_shell at {APP_ROOT}")
+    sec.warn_if_insecure_startup()
+    listen = sec.bind_host()
     handler = partial(Handler, directory=str(APP_ROOT))
-    server = ThreadingHTTPServer(("0.0.0.0", args.port), handler)
-    print(f"[appshell] UI http://0.0.0.0:{args.port}/  (API proxy -> {UPSTREAM}/v1/...)")
+    server = ThreadingHTTPServer((listen, args.port), handler)
+    print(f"[appshell] UI http://{listen}:{args.port}/  (API proxy -> {UPSTREAM}/v1/...)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

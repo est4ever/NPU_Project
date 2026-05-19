@@ -80,6 +80,7 @@ if [[ -n "${ACOULM_MODEL:-}" ]]; then
   export ACOULM_MODEL="$(python3 -c "import os; print(os.path.normpath('''${ACOULM_MODEL}'''))")"
 fi
 export ACOULM_PORT="${ACOULM_PORT:-8000}"
+export ACOULM_BIND_HOST="${ACOULM_BIND_HOST:-127.0.0.1}"
 
 # OpenVINO GenAI root (required for build.sh / run.sh)
 # export OPENVINO_GENAI_DIR=/path/to/openvino_genai_linux_...

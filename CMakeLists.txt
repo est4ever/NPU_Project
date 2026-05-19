@@ -65,6 +65,7 @@ add_executable(npu_wrapper
     src/platform_util.cpp
     src/SpeculativeEngine.cpp
     src/RestAPIServer.cpp
+    src/ApiSecurity.cpp
     src/InferenceRouting.cpp
     OpenVINO/Backend/OpenVINOBackend.cpp
     OpenVINO/Backend/BackendPool.cpp

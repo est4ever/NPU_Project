@@ -16,7 +16,7 @@ if [[ -n "${ACOULM_EXTRA_ARGS:-}" ]]; then
   EXTRA=(${ACOULM_EXTRA_ARGS})
 fi
 
-echo "[hpc] Starting server on 0.0.0.0:${PORT} (device=${DEVICE})"
+echo "[hpc] Starting server on ${ACOULM_BIND_HOST:-127.0.0.1}:${PORT} (device=${DEVICE})"
 exec "${ACOULM_HOME}/run.sh" "$MODEL" \
   --server \
   --port "$PORT" \

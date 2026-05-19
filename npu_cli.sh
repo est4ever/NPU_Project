@@ -7,8 +7,16 @@ API_BASE="${API_BASE%/}"
 CMD="${1:-chat}"
 shift || true
 
+api_curl() {
+  local extra=()
+  if [[ -n "${ACOULM_API_TOKEN:-}" ]]; then
+    extra+=(-H "Authorization: Bearer ${ACOULM_API_TOKEN}")
+  fi
+  curl -fsS "${extra[@]}" "$@"
+}
+
 api_get() {
-  curl -fsS "${API_BASE}$1"
+  api_curl "${API_BASE}$1"
 }
 
 api_backend() {
@@ -31,7 +39,7 @@ do_chat() {
       chat_template_kwargs:{enable_thinking:false}}')"
 
   local resp
-  if ! resp="$(curl -fsS --max-time 600 \
+  if ! resp="$(api_curl --max-time 600 \
     -H "Content-Type: application/json" \
     "${extra_hdr[@]}" \
     -X POST -d "$body" \

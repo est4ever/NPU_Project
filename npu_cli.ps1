@@ -453,10 +453,16 @@ function Invoke-Api {
         [object]$Body   = $null
     )
     $url = "$ApiBase$Path"
+    $hdr = @{}
+    if (-not [string]::IsNullOrWhiteSpace($env:ACOULM_API_TOKEN)) {
+        $hdr["Authorization"] = "Bearer $($env:ACOULM_API_TOKEN.Trim())"
+    }
     $params = @{ Uri = $url; Method = $Method; TimeoutSec = 30; ErrorAction = "Stop" }
+    if ($hdr.Count -gt 0) { $params.Headers = $hdr }
     if ($null -ne $Body) {
-        $params.Headers = @{ "Content-Type" = "application/json" }
-        $params.Body    = if ($Body -is [string]) { $Body } else { $Body | ConvertTo-Json -Depth 8 -Compress }
+        if (-not $params.ContainsKey("Headers")) { $params.Headers = @{} }
+        $params.Headers["Content-Type"] = "application/json"
+        $params.Body = if ($Body -is [string]) { $Body } else { $Body | ConvertTo-Json -Depth 8 -Compress }
     }
     return Invoke-RestMethod @params
 }

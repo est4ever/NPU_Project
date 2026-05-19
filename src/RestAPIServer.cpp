@@ -1,4 +1,5 @@
 #include "RestAPIServer.h"
+#include "ApiSecurity.hpp"
 #include "InferenceRouting.h"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -1126,14 +1127,14 @@ RestAPIServer::RestAPIServer(
         try_load_performance_profile(config_);
     }
     server_ = std::make_unique<httplib::Server>();
-    
-    // Set up CORS headers for all responses
-    server_->set_default_headers({
-        {"Access-Control-Allow-Origin", "*"},
-        {"Access-Control-Allow-Methods", "GET, POST, OPTIONS"},
-        {"Access-Control-Allow-Headers", "Content-Type, Authorization, x-npu-cli"}
+
+    server_->set_pre_routing_handler([](const httplib::Request& req, httplib::Response& res) {
+        if (acoulm::security::handle_preflight_and_auth(req, res)) {
+            return httplib::Server::HandlerResponse::Handled;
+        }
+        return httplib::Server::HandlerResponse::Unhandled;
     });
-    
+
     // Register endpoints
     server_->Post("/v1/chat/completions", [this](const httplib::Request& req, httplib::Response& res) {
         handle_chat_completions(req, res);
@@ -1288,12 +1289,14 @@ void RestAPIServer::start() {
     std::cout << "  - POST http://localhost:" << port_ << "/v1/cli/backend/restart\n";
     std::cout.flush();
     
-    std::cout << "[RestAPI] Attempting to bind to 0.0.0.0:" << port_ << "...\n";
+    acoulm::security::warn_if_insecure_startup();
+    const std::string bind_addr = acoulm::security::bind_host();
+    std::cout << "[RestAPI] Attempting to bind to " << bind_addr << ":" << port_ << "...\n";
     std::cout.flush();
     
     try {
         // First bind to the port (non-blocking)
-        if (!server_->bind_to_port("0.0.0.0", port_)) {
+        if (!server_->bind_to_port(bind_addr.c_str(), port_)) {
             std::cerr << "[RestAPI] FAILED - Could not bind to port " << port_ << " (may be in use?)\n";
             std::cerr.flush();
             listening_.store(false, std::memory_order_relaxed);
@@ -1361,17 +1364,7 @@ bool RestAPIServer::wait_until_listening(int timeout_ms) const {
 
 void RestAPIServer::handle_chat_completions(const httplib::Request& req, httplib::Response& res) {
     try {
-        const std::string cli_header = req.get_header_value("x-npu-cli");
-        if (to_lower_copy(cli_header) != "true") {
-            set_error_response(
-                res,
-                403,
-                "terminal_chat_only",
-                "Chat is terminal-only. Use .\\npu_cli.ps1 -Command chat",
-                json{{"required_header", "x-npu-cli: true"}}
-            );
-            return;
-        }
+        acoulm::security::apply_cors_headers(req, res);
 
         // Serialize all chat generations (OpenVINO continuous batching allows one in-flight generate).
         std::lock_guard<std::mutex> inference_slot(g_inference_dispatch_mutex);

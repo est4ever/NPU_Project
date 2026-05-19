@@ -2,6 +2,8 @@
 
 🌐 Website: https://est4ever.github.io/AcouLM/
 
+**Security:** see [SECURITY.md](SECURITY.md) (localhost bind, optional API token, SSH tunnels).
+
 AcouLM is a local AI control plane for Windows:
 - browser app shell (`app_shell/`)
 - terminal client (`npu_cli.ps1`)

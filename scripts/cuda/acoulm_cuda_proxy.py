@@ -28,6 +28,11 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+_SCRIPTS = Path(__file__).resolve().parents[1]
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+import acoulm_security as sec  # noqa: E402
+
 
 def acoulm_home() -> Path:
     return Path(os.environ.get("ACOULM_HOME", Path.cwd())).resolve()
@@ -333,23 +338,35 @@ class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, body: bytes, ctype: str = "application/json") -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-npu-cli")
+        sec.send_cors(self)
         self.end_headers()
         self.wfile.write(body)
 
     def _json(self, code: int, obj: object) -> None:
         self._send(code, json.dumps(obj).encode(), "application/json")
 
+    def _guard(self, path: str) -> bool:
+        """Return True if request was handled (rejected or OPTIONS)."""
+        denied = sec.check_request(self, path)
+        if denied is None:
+            return False
+        status, body = denied
+        if status == 204:
+            self.send_response(204)
+            sec.send_cors(self)
+            self.end_headers()
+            return True
+        self._json(status, body if body else {"error": {"message": "forbidden"}})
+        return True
+
     def do_OPTIONS(self) -> None:
-        self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-npu-cli")
-        self.end_headers()
+        path = self.path.split("?", 1)[0]
+        self._guard(path)
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
+        if self._guard(path):
+            return
         if path in ("/health", "/v1/health"):
             ready = STATE.ready if STATE else False
             self._json(
@@ -437,9 +454,12 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"error": {"message": "not found", "code": "not_found"}})
 
     def do_POST(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if self._guard(path):
+            return
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length) if length else b""
-        if self.path == "/v1/chat/completions":
+        if path == "/v1/chat/completions":
             fwd_headers = {"Content-Type": "application/json"}
             code, resp, ctype = llama_request("POST", "/v1/chat/completions", body, fwd_headers)
             self._send(code, resp, ctype)
@@ -488,9 +508,11 @@ def main() -> None:
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    print(f"[cuda] AcouLM API http://0.0.0.0:{acoulm_port}  →  llama-server :{llama_port}")
+    sec.warn_if_insecure_startup()
+    listen = sec.bind_host()
+    print(f"[cuda] AcouLM API http://{listen}:{acoulm_port}  →  llama-server :{llama_port}")
     print("[cuda] Run acoulm in a terminal for chat + control panel.")
-    server = HTTPServer(("0.0.0.0", acoulm_port), Handler)
+    server = HTTPServer((listen, acoulm_port), Handler)
     try:
         server.serve_forever()
     finally:

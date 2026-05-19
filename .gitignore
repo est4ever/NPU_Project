@@ -65,6 +65,8 @@ registry/*.json
 
 # Per-site HPC secrets/paths (never commit)
 scripts/hpc/local_env.sh
+registry/.api_token
+.acoulm/api_token
 *.bak
 
 # OpenWebUI runtime secret (auto-generated, do not commit)

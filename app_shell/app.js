@@ -84,6 +84,22 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     return String(value || "").trim().replace(/\/+$/, "");
   }
 
+  function apiAuthHeaders(extra = {}) {
+    const hdr = { ...(extra || {}) };
+    try {
+      const fromField = el("apiToken") ? String(el("apiToken").value || "").trim() : "";
+      const fromStore = localStorage.getItem("acoulm_api_token") || "";
+      const token = fromField || fromStore;
+      if (token) {
+        hdr.Authorization = `Bearer ${token}`;
+      }
+    } catch {
+      // ignore storage errors
+    }
+    hdr["x-acoulm-panel"] = "true";
+    return hdr;
+  }
+
   function baseUrl() {
     const input = el("apiBase");
     return sanitizeBaseUrl(input ? input.value : defaultApiBase());
@@ -630,7 +646,7 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       const response = await fetch(url, {
         ...restFetch,
         signal: controller.signal,
-        headers: { "Content-Type": "application/json", ...(optHeaders || {}) },
+        headers: apiAuthHeaders({ "Content-Type": "application/json", ...(optHeaders || {}) }),
       });
 
       const payload = await response.json().catch(() => ({}));
@@ -4059,6 +4075,17 @@ if (window.__NPU_APP_SHELL_LOADED__) {
   function initializeApp() {
     const pf = loadPrefs();
     uiTheme = pf.theme === "dark" ? "dark" : "light";
+    const tokenNode = el("apiToken");
+    if (tokenNode) {
+      try {
+        const stored = localStorage.getItem("acoulm_api_token") || "";
+        if (stored) {
+          tokenNode.value = stored;
+        }
+      } catch {
+        // ignore
+      }
+    }
     applyTheme(uiTheme);
     const themeSelect = el("themeSelect");
     if (themeSelect) {
@@ -4222,6 +4249,25 @@ if (window.__NPU_APP_SHELL_LOADED__) {
       clearTimeout(apiBaseSaveTimer);
       apiBaseSaveTimer = setTimeout(() => {
         savePrefs({ apiBase: sanitizeBaseUrl(node.value || defaultApiBase()) });
+      }, 400);
+    });
+    on("apiToken", "input", () => {
+      const node = el("apiToken");
+      if (!node) {
+        return;
+      }
+      clearTimeout(apiBaseSaveTimer);
+      apiBaseSaveTimer = setTimeout(() => {
+        try {
+          const t = String(node.value || "").trim();
+          if (t) {
+            localStorage.setItem("acoulm_api_token", t);
+          } else {
+            localStorage.removeItem("acoulm_api_token");
+          }
+        } catch {
+          // ignore
+        }
       }, 400);
     });
 
