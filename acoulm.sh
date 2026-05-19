@@ -24,7 +24,7 @@ acoulm_setup() {
   mkdir -p "$bindir"
   ln -sf "${root}/acoulm.sh" "$link"
   chmod +x "${root}/acoulm.sh" "${root}/build.sh" "${root}/run.sh" "${root}/npu_cli.sh" \
-    "${root}/scripts/linux/start_stack.sh" 2>/dev/null || true
+    "${root}/scripts/linux/start_stack.sh" "${root}/scripts/linux/appshell_server.py" 2>/dev/null || true
   echo "[acoulm] Linked: $link -> ${root}/acoulm.sh"
   echo "[acoulm] Add to PATH (bash):"
   echo "  export PATH=\"\${HOME}/.local/bin:\$PATH\""

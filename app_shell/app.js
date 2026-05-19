@@ -100,6 +100,32 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     return "http://127.0.0.1:8000/v1";
   }
 
+  /** Prefer same-origin /v1 when app_shell proxies the API (Linux acoulm, SSH tunnel :5173 only). */
+  async function resolveApiBase() {
+    const pf = loadPrefs();
+    const originBase = `${window.location.origin}/v1`;
+    if (window.location.protocol.startsWith("http")) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 2000);
+        const response = await fetch(`${originBase}/health`, {
+          method: "GET",
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        if (response.ok) {
+          return sanitizeBaseUrl(originBase);
+        }
+      } catch {
+        // fall through to direct API port
+      }
+    }
+    if (typeof pf.apiBase === "string" && pf.apiBase.trim()) {
+      return sanitizeBaseUrl(pf.apiBase.trim());
+    }
+    return defaultApiBase();
+  }
+
   function formatWaitDuration(ms) {
     const sec = Math.max(1, Math.round(ms / 1000));
     if (sec < 60) {
@@ -4032,9 +4058,6 @@ if (window.__NPU_APP_SHELL_LOADED__) {
 
   function initializeApp() {
     const pf = loadPrefs();
-    if (typeof pf.apiBase === "string" && pf.apiBase.trim()) {
-      setApiBase(pf.apiBase.trim());
-    }
     uiTheme = pf.theme === "dark" ? "dark" : "light";
     applyTheme(uiTheme);
     const themeSelect = el("themeSelect");
@@ -4249,7 +4272,12 @@ if (window.__NPU_APP_SHELL_LOADED__) {
     void sendTelemetryEvent("app_start");
     bindGlobalShortcuts();
     startPerformancePolling();
-    bootstrap()
+    void resolveApiBase()
+      .then((base) => {
+        setApiBase(base);
+        savePrefs({ apiBase: base });
+        return bootstrap();
+      })
       .then(() =>
         Promise.all([
           loadDiscoverList(),

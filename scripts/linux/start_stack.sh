@@ -49,7 +49,8 @@ backend_running() {
 }
 
 appshell_running() {
-  pgrep -f "http\.server ${APP_PORT}.*app_shell" >/dev/null 2>&1
+  pgrep -f 'appshell_server\.py' >/dev/null 2>&1 || \
+    pgrep -f "http\.server ${APP_PORT}.*app_shell" >/dev/null 2>&1
 }
 
 open_browser() {
@@ -71,11 +72,18 @@ open_browser() {
 
 start_appshell_bg() {
   if appshell_running || appshell_up; then
-    return 0
+    # Replace legacy static-only server (no API proxy) with appshell_server.py
+    if pgrep -f "http\.server ${APP_PORT}.*app_shell" >/dev/null 2>&1; then
+      pkill -f "http\.server ${APP_PORT}.*app_shell" 2>/dev/null || true
+      sleep 0.5
+    elif pgrep -f 'appshell_server\.py' >/dev/null 2>&1; then
+      return 0
+    fi
   fi
-  echo "[AcouLM] Starting control panel on :${APP_PORT} (background)..."
-  nohup python3 -m http.server "$APP_PORT" --directory "${ACOULM_HOME}/app_shell" \
-    >>"$APPSHELL_LOG" 2>&1 &
+  echo "[AcouLM] Starting control panel on :${APP_PORT} (API proxied on same port)..."
+  export ACOULM_API_UPSTREAM="${API_BASE}"
+  nohup python3 "${ACOULM_HOME}/scripts/linux/appshell_server.py" --port "$APP_PORT" \
+    --upstream "${API_BASE}" >>"$APPSHELL_LOG" 2>&1 &
   disown 2>/dev/null || true
   local i=0
   while (( i < 20 )); do

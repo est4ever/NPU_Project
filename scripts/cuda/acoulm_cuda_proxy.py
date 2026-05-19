@@ -176,6 +176,79 @@ STATE: ProxyState | None = None
 ACOULM_PORT = 8000
 
 
+def acoulm_home() -> Path:
+    return Path(os.environ.get("ACOULM_HOME", Path.cwd())).resolve()
+
+
+def load_registry(name: str) -> dict:
+    path = acoulm_home() / "registry" / name
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def status_payload() -> dict:
+    models_reg = load_registry("models_registry.json")
+    backends_reg = load_registry("backends_registry.json")
+    sel_model = str(models_reg.get("selected_model") or "")
+    if not sel_model and STATE:
+        sel_model = STATE.model_path.stem
+    sel_backend = str(backends_reg.get("selected_backend") or "cuda-llama")
+    return {
+        "policy": "PERFORMANCE",
+        "performance_profile": "cuda-llama",
+        "performance_reason": "external CUDA backend",
+        "active_device": "CUDA",
+        "devices": ["CUDA"],
+        "available_devices": [{"id": "CUDA", "tier": "discrete"}],
+        "json_output": "OFF",
+        "split_prefill": "OFF",
+        "context_routing": "OFF",
+        "optimize_memory": "OFF",
+        "ttft_ms": 0,
+        "tpot_ms": 0,
+        "throughput": 0,
+        "selected_model": sel_model,
+        "auto_select_best_model": bool(models_reg.get("auto_select_best_model", False)),
+        "selected_backend": sel_backend,
+    }
+
+
+def memory_payload() -> dict:
+    return {
+        "optimize_memory": "OFF",
+        "disk_paging_enabled": False,
+        "paging_directory": "",
+        "ram": {"total_mb": 0, "used_mb": 0, "available_mb": 0, "usage_percent": 0},
+        "vram": {"total_mb": 0, "used_mb": 0, "available_mb": 0, "usage_percent": 0},
+    }
+
+
+def metrics_payload(mode: str = "last") -> dict:
+    return {"mode": mode, "record_count": 0}
+
+
+def readiness_payload() -> dict:
+    models_reg = load_registry("models_registry.json")
+    sel = str(models_reg.get("selected_model") or "")
+    out: dict = {
+        "api_port": ACOULM_PORT,
+        "selected_model_id": sel,
+        "model_path": str(STATE.model_path) if STATE else "",
+    }
+    if STATE:
+        out["model_analysis"] = {
+            "exists": STATE.model_path.is_file(),
+            "kind": "gguf",
+            "gguf_count": 1,
+            "runnable_hint": "GGUF via llama-server",
+        }
+    return out
+
+
 def llama_request(method: str, path: str, body: bytes | None, headers: dict) -> tuple[int, bytes, str]:
     assert STATE is not None
     url = f"{STATE.llama_base}{path}"
@@ -214,7 +287,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:
-        if self.path in ("/health", "/v1/health"):
+        path = self.path.split("?", 1)[0]
+        if path in ("/health", "/v1/health"):
             ready = STATE.ready if STATE else False
             self._json(
                 200,
@@ -226,20 +300,76 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
             return
-        if self.path == "/v1/cli/status":
+        if path == "/v1/cli/status":
+            self._json(200, status_payload())
+            return
+        if path == "/v1/cli/model/list":
+            reg = load_registry("models_registry.json")
+            if not reg.get("models") and STATE:
+                mid = STATE.model_path.stem
+                reg = {
+                    "schema": 1,
+                    "selected_model": mid,
+                    "models": [
+                        {
+                            "id": mid,
+                            "path": str(STATE.model_path),
+                            "format": "gguf",
+                            "status": "ready",
+                        }
+                    ],
+                }
+            self._json(200, reg)
+            return
+        if path == "/v1/cli/backend/list":
+            reg = load_registry("backends_registry.json")
+            if not reg.get("backends"):
+                reg = {
+                    "schema": 1,
+                    "selected_backend": "cuda-llama",
+                    "backends": [
+                        {
+                            "id": "cuda-llama",
+                            "type": "external",
+                            "entrypoint": "scripts/cuda/acoulm_cuda_proxy.py",
+                            "formats": ["gguf"],
+                            "status": "ready",
+                        }
+                    ],
+                }
+            self._json(200, reg)
+            return
+        if path == "/v1/cli/memory":
+            self._json(200, memory_payload())
+            return
+        if path.startswith("/v1/cli/metrics"):
+            mode = "last"
+            if "?" in self.path:
+                for part in self.path.split("?", 1)[1].split("&"):
+                    if part.startswith("mode="):
+                        mode = part.split("=", 1)[1]
+            self._json(200, metrics_payload(mode))
+            return
+        if path == "/v1/cli/readiness":
+            self._json(200, readiness_payload())
+            return
+        if path == "/v1/cli/models/discover":
+            self._json(200, {"discover": []})
+            return
+        if path == "/v1/cli/backend/probe":
             self._json(
                 200,
                 {
-                    "active_device": "CUDA",
-                    "devices": ["CUDA"],
-                    "selected_backend": "cuda-llama",
-                    "selected_model": str(STATE.model_path.name) if STATE else "",
-                    "policy": "PERFORMANCE",
-                    "performance_profile": "cuda-llama",
+                    "backend": "cuda-llama",
+                    "healthy": bool(STATE and STATE.ready),
+                    "entrypoint": "scripts/cuda/acoulm_cuda_proxy.py",
                 },
             )
             return
-        if self.path == "/v1/models":
+        if path == "/v1/cli/metrics/recommendation":
+            self._json(200, {"recommendation": "PERFORMANCE", "device": "CUDA"})
+            return
+        if path == "/v1/models":
             self._json(200, {"object": "list", "data": [{"id": "cuda-llama", "object": "model"}]})
             return
         self._json(404, {"error": {"message": "not found", "code": "not_found"}})
@@ -297,12 +427,7 @@ def main() -> None:
     signal.signal(signal.SIGTERM, shutdown)
 
     print(f"[cuda] AcouLM API http://0.0.0.0:{acoulm_port}  →  llama-server :{llama_port}")
-    print(
-        "[cuda] Server is running (this terminal will stay busy — that is normal).\n"
-        "[cuda] Open a second SSH session, then:\n"
-        "       cd ~/AcouLM && source scripts/hpc/local_env.sh\n"
-        "       bash acoulm.sh chat \"Hello\""
-    )
+    print("[cuda] Run acoulm in a terminal for chat + control panel.")
     server = HTTPServer(("0.0.0.0", acoulm_port), Handler)
     try:
         server.serve_forever()
