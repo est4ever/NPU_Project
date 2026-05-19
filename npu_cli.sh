@@ -35,13 +35,17 @@ case "$CMD" in
       echo "Usage: $0 chat \"your message\"" >&2
       exit 1
     fi
-    BODY="$(jq -n --arg p "$PROMPT" '{messages:[{role:"user",content:$p}], stream:true, max_tokens:256, temperature:0.2}')"
-    api_post "/v1/chat/completions" "$BODY" | while IFS= read -r line; do
-      [[ "$line" == data:* ]] || continue
-      payload="${line#data: }"
-      [[ "$payload" == "[DONE]" ]] && break
-      echo -n "$(echo "$payload" | jq -r '.choices[0].delta.content // empty' 2>/dev/null)"
-    done
+    # Non-streaming: works with OpenVINO REST and cuda-llama (llama-server) proxies.
+    BODY="$(jq -n --arg p "$PROMPT" '{messages:[{role:"user",content:$p}], stream:false, max_tokens:256, temperature:0.2}')"
+    echo "[chat] Waiting for model (27B first reply can take 1–3 min)..." >&2
+    RESP="$(curl -fsS --max-time 600 -H "Content-Type: application/json" \
+      -H "x-npu-cli: true" \
+      -X POST -d "$BODY" "${API_BASE}/v1/chat/completions")"
+    if echo "$RESP" | jq -e '.error' >/dev/null 2>&1; then
+      echo "$RESP" | jq . >&2
+      exit 1
+    fi
+    echo "$RESP" | jq -r '.choices[0].message.content // empty'
     echo ""
     ;;
   *)
