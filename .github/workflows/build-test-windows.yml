@@ -19,11 +19,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: acoulm help renders
+      - name: acoulm entrypoint and core scripts
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          powershell -NoProfile -ExecutionPolicy Bypass -File .\acoulm.ps1 help | Out-Host
+          foreach ($p in @(".\acoulm.ps1", ".\npu_cli.ps1", ".\start_app.ps1", ".\build.ps1")) {
+            if (-not (Test-Path -LiteralPath $p)) { throw "Missing required script: $p" }
+          }
+          # Product policy: bare `acoulm` only — extra args must exit non-zero with a hint.
+          & powershell -NoProfile -ExecutionPolicy Bypass -File .\acoulm.ps1 help 2>&1 | Tee-Object -Variable out | Out-Host
+          $exit = $LASTEXITCODE
+          $out = ($out | Out-String)
+          if ($exit -ne 1) {
+            throw "acoulm.ps1 help should exit 1 (got $exit). Output: $out"
+          }
+          if ($out -notmatch "Run acoulm with no arguments") {
+            throw "Unexpected acoulm.ps1 output: $out"
+          }
+          Write-Host "acoulm.ps1 entrypoint policy OK."
 
       - name: Parse JSON registries
         shell: pwsh
