@@ -36,7 +36,7 @@ case "$CMD" in
       exit 1
     fi
     # Non-streaming: works with OpenVINO REST and cuda-llama (llama-server) proxies.
-    BODY="$(jq -n --arg p "$PROMPT" '{messages:[{role:"user",content:$p}], stream:false, max_tokens:256, temperature:0.2}')"
+    BODY="$(jq -n --arg p "$PROMPT" '{messages:[{role:"user",content:$p}], stream:false, max_tokens:64, temperature:0.2, chat_template_kwargs:{enable_thinking:false}}')"
     echo "[chat] Waiting for model (27B first reply can take 1–3 min)..." >&2
     RESP="$(curl -fsS --max-time 600 -H "Content-Type: application/json" \
       -H "x-npu-cli: true" \

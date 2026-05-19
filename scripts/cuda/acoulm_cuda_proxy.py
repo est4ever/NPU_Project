@@ -99,7 +99,10 @@ class ProxyState:
     def start_llama(self, port: int) -> None:
         exe = find_llama_server()
         ngl = os.environ.get("LLAMA_NGL", "999")
-        ctx = os.environ.get("LLAMA_CTX", "8192")
+        # 27B on 24GB: 4 slots x 8192 ctx often hangs OOM/swap; use 1 slot + smaller ctx.
+        ctx = os.environ.get("LLAMA_CTX", "4096")
+        parallel = os.environ.get("LLAMA_PARALLEL", "1")
+        reasoning = os.environ.get("LLAMA_REASONING", "off")
         env = os.environ.copy()
         if self.devices:
             env["CUDA_VISIBLE_DEVICES"] = self.devices
@@ -115,6 +118,12 @@ class ProxyState:
             ngl,
             "-c",
             ctx,
+            "-np",
+            parallel,
+            "--reasoning",
+            reasoning,
+            "--cache-ram",
+            os.environ.get("LLAMA_CACHE_RAM", "0"),
         ]
         print(f"[cuda] Starting llama-server (CUDA_VISIBLE_DEVICES={self.devices or 'all'})")
         print(f"[cuda]   {' '.join(cmd)}")
@@ -288,6 +297,12 @@ def main() -> None:
     signal.signal(signal.SIGTERM, shutdown)
 
     print(f"[cuda] AcouLM API http://0.0.0.0:{acoulm_port}  →  llama-server :{llama_port}")
+    print(
+        "[cuda] Server is running (this terminal will stay busy — that is normal).\n"
+        "[cuda] Open a second SSH session, then:\n"
+        "       cd ~/AcouLM && source scripts/hpc/local_env.sh\n"
+        "       bash acoulm.sh chat \"Hello\""
+    )
     server = HTTPServer(("0.0.0.0", acoulm_port), Handler)
     try:
         server.serve_forever()
