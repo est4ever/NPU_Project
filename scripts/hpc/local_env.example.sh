@@ -10,7 +10,8 @@ export OPENVINO_GENAI_DIR=/path/to/openvino_genai_linux
 export ACOULM_MODEL=/scratch/$USER/models/Qwen2.5-3B-Instruct
 export ACOULM_DEVICE=GPU
 
-# CUDA backend (after: acoulm use-cuda)
+# CUDA backend (after: acoulm use-cuda) — must be a .gguf path, not HF/IR folder
+# export ACOULM_MODEL=$HOME/AcouLM/models/Qwen3.6-27B-gguf/Qwen_Qwen3.6-27B-Q4_K_M.gguf
 # export LLAMA_SERVER=$HOME/llama.cpp/build/bin/llama-server
 # export ACOULM_CUDA_DEVICES=0
 # export LLAMA_CTX=4096

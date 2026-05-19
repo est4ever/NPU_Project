@@ -29,24 +29,90 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 
+def acoulm_home() -> Path:
+    return Path(os.environ.get("ACOULM_HOME", Path.cwd())).resolve()
+
+
+def _gguf_candidates_in_dir(directory: Path) -> list[Path]:
+    ggufs = sorted(directory.glob("*.gguf"))
+    if ggufs:
+        return ggufs
+    return sorted(directory.rglob("*.gguf"))
+
+
+def _pick_gguf(ggufs: list[Path]) -> Path:
+    if len(ggufs) == 1:
+        return ggufs[0]
+    return max(ggufs, key=lambda f: f.stat().st_size)
+
+
+def _registry_gguf_paths() -> list[Path]:
+    reg = acoulm_home() / "registry" / "models_registry.json"
+    if not reg.is_file():
+        return []
+    try:
+        data = json.loads(reg.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    root = acoulm_home()
+    out: list[Path] = []
+    sel = str(data.get("selected_model") or "")
+    models = list(data.get("models") or [])
+    # Selected model first, then any gguf-format entry.
+    ordered = [m for m in models if str(m.get("id", "")) == sel]
+    ordered += [m for m in models if m not in ordered]
+    for m in ordered:
+        fmt = str(m.get("format") or "").lower()
+        rel = str(m.get("path") or "").strip()
+        if not rel:
+            continue
+        p = Path(rel).expanduser()
+        if not p.is_absolute():
+            p = (root / rel.lstrip("./")).resolve()
+        if fmt == "gguf" or p.suffix == ".gguf" or p.name.endswith(".gguf"):
+            out.append(p)
+        elif p.is_dir():
+            found = _gguf_candidates_in_dir(p)
+            if found:
+                out.append(_pick_gguf(found))
+    return out
+
+
 def find_gguf(model_arg: str) -> Path:
     p = Path(model_arg).expanduser().resolve()
     if p.is_file() and p.suffix == ".gguf":
         return p
     if p.is_dir():
-        ggufs = sorted(p.glob("*.gguf"))
-        if len(ggufs) == 1:
-            return ggufs[0]
-        if len(ggufs) > 1:
-            # prefer largest (often main weights)
-            return max(ggufs, key=lambda f: f.stat().st_size)
+        ggufs = _gguf_candidates_in_dir(p)
+        if ggufs:
+            return _pick_gguf(ggufs)
+        sibling = p.parent / f"{p.name}-gguf"
+        if sibling.is_dir():
+            ggufs = _gguf_candidates_in_dir(sibling)
+            if ggufs:
+                print(f"[cuda] Using GGUF from sibling folder: {sibling}", file=sys.stderr)
+                return _pick_gguf(ggufs)
         if (p / "openvino_model.xml").exists() or list(p.glob("openvino*.xml")):
+            sibling = p.parent / f"{p.name}-gguf"
+            hint = f"\n  Set ACOULM_MODEL={sibling}/*.gguf in scripts/hpc/local_env.sh" if sibling.is_dir() else ""
             sys.exit(
-                f"[cuda] {p} is OpenVINO IR. CUDA backend needs GGUF.\n"
-                "  Convert HF→GGUF (llama.cpp quantize) or set selected_backend=openvino.\n"
-                "  Example: huggingface-cli download ... *.gguf"
+                f"[cuda] {p} is OpenVINO/HF weights, not GGUF.{hint}\n"
+                "  CUDA backend needs a .gguf file (see models/*-gguf/)."
             )
-    sys.exit(f"[cuda] No .gguf found at {p}")
+    for reg_path in _registry_gguf_paths():
+        if reg_path.is_file() and reg_path.suffix == ".gguf":
+            print(f"[cuda] Using GGUF from registry: {reg_path}", file=sys.stderr)
+            return reg_path
+        if reg_path.is_dir():
+            ggufs = _gguf_candidates_in_dir(reg_path)
+            if ggufs:
+                print(f"[cuda] Using GGUF from registry path: {reg_path}", file=sys.stderr)
+                return _pick_gguf(ggufs)
+    sys.exit(
+        f"[cuda] No .gguf found at {p}\n"
+        f"  Fix: export ACOULM_MODEL={acoulm_home()}/models/<name>-gguf/<file>.gguf\n"
+        "  in scripts/hpc/local_env.sh (HF/IR folders do not work on cuda-llama)."
+    )
 
 
 def port_is_free(host: str, port: int) -> bool:
@@ -174,10 +240,6 @@ class ProxyState:
 
 STATE: ProxyState | None = None
 ACOULM_PORT = 8000
-
-
-def acoulm_home() -> Path:
-    return Path(os.environ.get("ACOULM_HOME", Path.cwd())).resolve()
 
 
 def load_registry(name: str) -> dict:

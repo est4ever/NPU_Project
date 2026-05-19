@@ -40,5 +40,5 @@ chmod +x "${ROOT}/scripts/hpc/launch_cuda_llm.sh" "${ROOT}/scripts/cuda/acoulm_c
 
 echo "[cuda] Set ACOULM_MODEL to a .gguf file (OpenVINO IR will not work on this backend)."
 echo "[cuda] Example:"
-echo "  export ACOULM_MODEL=\$HOME/AcouLM/models/Qwen2.5-3B-Instruct-Q4_K_M.gguf"
-echo "  bash acoulm.sh start"
+echo "  export ACOULM_MODEL=\$HOME/AcouLM/models/Qwen3.6-27B-gguf/Qwen_Qwen3.6-27B-Q4_K_M.gguf"
+echo "  acoulm"

@@ -104,7 +104,13 @@ start_backend_bg() {
     fi
     return 0
   fi
-  local model="${ACOULM_MODEL:?Set ACOULM_MODEL in scripts/hpc/local_env.sh}"
+  if [[ -z "${ACOULM_MODEL:-}" ]]; then
+    echo "[AcouLM] ACOULM_MODEL is not set." >&2
+    echo "  Run:  bash scripts/hpc/configure_cuda_env.sh" >&2
+    echo "  Then: source scripts/hpc/local_env.sh && acoulm" >&2
+    return 1
+  fi
+  local model="${ACOULM_MODEL}"
   local device="${ACOULM_DEVICE:-GPU}"
   echo "[AcouLM] Starting API on :${API_PORT} (background, logs: $BACKEND_LOG)..."
   local extra=()
