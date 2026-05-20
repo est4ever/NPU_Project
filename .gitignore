@@ -11,6 +11,10 @@ venv/
 .venv/
 __pycache__/
 *.pyc
+.env
+.env.*
+*.env
+*.local
 
 # OpenVINO / binaries
 *.dll
@@ -57,6 +61,8 @@ runlogs/
 # Runtime-generated metrics
 metrics.ndjson
 telemetry/
+*.pid
+*.seed
 
 # Registry JSON is machine-specific (paths, selections). Commit only *.example.json templates.
 registry/*.json
@@ -67,6 +73,7 @@ registry/*.json
 scripts/hpc/local_env.sh
 registry/.api_token
 .acoulm/api_token
+.acoulm/
 *.bak
 
 # OpenWebUI runtime secret (auto-generated, do not commit)
